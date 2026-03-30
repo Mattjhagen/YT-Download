@@ -8,7 +8,7 @@ echo "🚀 Starting Media Drop installation..."
 
 # 1. Update and install dependencies
 sudo apt-get update
-sudo apt-get install -y nodejs npm aria2 sqlite3 samba curl
+sudo apt-get install -y nodejs aria2 sqlite3 samba curl
 
 # 2. Create directories
 sudo mkdir -p /opt/media-drop/app
