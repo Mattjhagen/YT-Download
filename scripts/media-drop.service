@@ -1,0 +1,15 @@
+[Unit]
+Description=Media Drop Downloader and Streamer
+After=network.target
+
+[Service]
+Type=simple
+User=media-drop
+Group=media-drop
+WorkingDirectory=/opt/media-drop/app
+EnvironmentFile=/opt/media-drop/app/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
