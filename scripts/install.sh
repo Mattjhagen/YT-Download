@@ -18,19 +18,24 @@ sudo mkdir -p /srv/media-drop/db
 
 # 3. Setup User
 if ! id "media-drop" &>/dev/null; then
-    sudo useradd -r -s /bin/false media-drop
+    sudo useradd -r -m -s /bin/false media-drop
+else
+    # Ensure home directory exists for npm cache
+    sudo mkdir -p /home/media-drop
+    sudo chown media-drop:media-drop /home/media-drop
 fi
 
 # 4. Set permissions
 sudo chown -R media-drop:media-drop /srv/media-drop
 sudo chown -R media-drop:media-drop /opt/media-drop
 
-# 5. Copy app files (Assuming current dir is the repo)
+# 5. Copy app files
 sudo cp -r app/* /opt/media-drop/app/
 cd /opt/media-drop/app
 
 # 6. Install NPM dependencies
-sudo -u media-drop npm install --omit=dev
+# Use a temporary home for npm install to avoid permission issues with system user
+sudo -u media-drop HOME=/home/media-drop npm install --omit=dev
 
 # 7. Setup Environment
 if [ ! -f .env ]; then
