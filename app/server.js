@@ -175,4 +175,13 @@ app.get('/api/files', auth, (req, res) => {
 
 app.listen(port, () => {
   console.log(`Media Drop server running at http://localhost:${port}`);
+  
+  // Resume interrupted downloads on startup
+  const interruptedJobs = db.getAllJobs().filter(j => j.status === 'downloading' || j.status === 'queued');
+  if (interruptedJobs.length > 0) {
+    console.log(`🚀 Resuming ${interruptedJobs.length} interrupted jobs...`);
+    interruptedJobs.forEach(job => {
+      downloader.startDownload(job.id);
+    });
+  }
 });
