@@ -55,6 +55,14 @@ class Downloader {
     return parsed;
   }
 
+  async checkYtDlp() {
+    return new Promise((resolve) => {
+      const proc = spawn('yt-dlp', ['--version']);
+      proc.on('error', () => resolve(false));
+      proc.on('close', (code) => resolve(code === 0));
+    });
+  }
+
   async startDownload(jobId) {
     const job = this.db.getJob(jobId);
     if (!job) return;
@@ -62,8 +70,13 @@ class Downloader {
     this.db.updateJob(jobId, { status: 'downloading', updated_at: new Date().toISOString() });
 
     try {
-      const hasAria2 = await this.checkAria2();
-      if (hasAria2) {
+      const parsed = new URL(job.url);
+      const isYouTube = parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be');
+      const hasYtDlp = await this.checkYtDlp();
+
+      if (isYouTube && hasYtDlp) {
+        await this.downloadYtDlp(job);
+      } else if (await this.checkAria2()) {
         await this.downloadAria2(job);
       } else {
         await this.downloadNative(job);
@@ -82,6 +95,56 @@ class Downloader {
         updated_at: new Date().toISOString() 
       });
     }
+  }
+
+  async downloadYtDlp(job) {
+    const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
+    if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
+
+    // Use yt-dlp to download. --get-filename helps if title is dynamic.
+    // For MVP, we use the safe_filename or let yt-dlp decide and we rename it.
+    const args = [
+      '--output', path.join(finalDir, job.safe_filename),
+      '--no-playlist',
+      '--newline',
+      '--progress',
+      '--progress-template', '{"percent":"%(progress._percent_str)s"}',
+      job.url
+    ];
+
+    const child = spawn('yt-dlp', args);
+    this.activeDownloads.set(job.id, child);
+
+    return new Promise((resolve, reject) => {
+      child.stdout.on('data', (data) => {
+        const output = data.toString();
+        // Parse json progress from template: {"percent":" 25.4%"}
+        const match = output.match(/\{"percent":"\s*(.*)%"\}/);
+        if (match) {
+          const progress = parseFloat(match[1]);
+          this.db.updateJob(job.id, { progress_percent: progress });
+        }
+      });
+
+      child.on('close', (code) => {
+        this.activeDownloads.delete(job.id);
+        if (code === 0) {
+          // Verify if filename was exact or changed
+          const finalPath = path.join(finalDir, job.safe_filename);
+          // Sometimes yt-dlp appends .ext even if we give a path without it
+          // But our safe_filename should already have it.
+          const stats = fs.statSync(finalPath);
+          this.db.updateJob(job.id, {
+              file_size: stats.size,
+              absolute_path: finalPath,
+              relative_path: job.safe_filename
+          });
+          resolve();
+        } else {
+          reject(new Error(`yt-dlp exited with code ${code}`));
+        }
+      });
+    });
   }
 
   async checkAria2() {
