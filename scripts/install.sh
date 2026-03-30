@@ -6,6 +6,9 @@ set -e
 
 echo "🚀 Starting Media Drop installation..."
 
+# 0. Capture repository root
+REPO_ROOT=$(pwd)
+
 # 1. Update and install dependencies
 sudo apt-get update
 sudo apt-get install -y nodejs aria2 sqlite3 samba curl
@@ -29,12 +32,11 @@ fi
 sudo chown -R media-drop:media-drop /srv/media-drop
 sudo chown -R media-drop:media-drop /opt/media-drop
 
-# 5. Copy app files
-sudo cp -r app/* /opt/media-drop/app/
+# 5. Copy app files (including hidden files like .env.example)
+sudo cp -r app/. /opt/media-drop/app/
 cd /opt/media-drop/app
 
 # 6. Install NPM dependencies
-# Use a temporary home for npm install to avoid permission issues with system user
 sudo -u media-drop HOME=/home/media-drop npm install --omit=dev
 
 # 7. Setup Environment
@@ -44,7 +46,7 @@ if [ ! -f .env ]; then
 fi
 
 # 8. Install Systemd Service
-sudo cp scripts/media-drop.service /etc/systemd/system/
+sudo cp "$REPO_ROOT/scripts/media-drop.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable media-drop
 sudo systemctl start media-drop
