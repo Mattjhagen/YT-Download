@@ -254,16 +254,29 @@ const App = {
         if (this.eventSource) this.eventSource.close();
         this.eventSource = new EventSource('/api/events');
         this.eventSource.onmessage = (e) => {
-            const jobs = JSON.parse(e.data);
-            jobs.forEach(job => {
-                const item = document.querySelector(`.job-item[data-id="${job.id}"]`);
-                if (item) {
-                    const bar = item.querySelector('.progress-bar-fill');
-                    const text = item.querySelector('.job-percent');
-                    if (bar) bar.style.width = `${job.progress_percent}%`;
-                    if (text) text.innerText = `${Math.round(job.progress_percent)}%`;
-                }
-            });
+            const payload = JSON.parse(e.data);
+
+            if (payload.type === 'refresh') {
+                // A job changed status — do a full dashboard reload
+                if (this.currentTab === 'dashboard-page') this.loadDashboard();
+                return;
+            }
+
+            if (payload.type === 'progress' && Array.isArray(payload.jobs)) {
+                payload.jobs.forEach(job => {
+                    const item = document.querySelector(`.job-item[data-id="${job.id}"]`);
+                    if (item) {
+                        const bar = item.querySelector('.progress-bar-fill');
+                        const text = item.querySelector('.job-percent');
+                        if (bar) bar.style.width = `${job.progress_percent}%`;
+                        if (text) text.innerText = `${Math.round(job.progress_percent)}%`;
+                    }
+                });
+            }
+        };
+        this.eventSource.onerror = () => {
+            // Reconnect after a short delay on error
+            setTimeout(() => this.startSSE(), 3000);
         };
     },
 

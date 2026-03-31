@@ -80,15 +80,21 @@ app.get('/api/downloads', auth, (req, res) => {
   res.json(jobs);
 });
 
-app.post('/api/downloads', auth, limiter, async (req, res) => {
+app.post('/api/downloads', auth, async (req, res) => {
   const { url, filename, subfolder, is_audio } = req.body;
   const ip = req.headers['cf-connecting-ip'] || req.ip;
   const userAgent = req.headers['user-agent'];
-  
+
   try {
+    // Validate subfolder to prevent path traversal
+    let safeSubfolder = '';
+    if (subfolder) {
+      safeSubfolder = sanitizeFilename(subfolder.replace(/\//g, '_').replace(/\\/g, '_'));
+    }
+
     const parsedUrl = await downloader.validateURL(url);
     const domain = parsedUrl.hostname;
-    
+
     // Log intent
     db.logAction('DOWNLOAD_SUBMIT', { url, ip, user_agent: userAgent, status: 'pending' });
 
@@ -97,18 +103,18 @@ app.post('/api/downloads', auth, limiter, async (req, res) => {
     if (!finalTitle) {
         finalTitle = await downloader.getMetadata(url);
     }
-    
+
     // Determine filename
     let finalFilename = finalTitle || 'download';
     if (!path.extname(finalFilename) && path.extname(parsedUrl.pathname)) {
         finalFilename += path.extname(parsedUrl.pathname);
     }
-    
+
     const safeName = sanitizeFilename(finalFilename);
     const id = uuidv4();
-    
+
     const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
-    const relativePath = path.join(subfolder || '', safeName);
+    const relativePath = safeSubfolder ? path.join(safeSubfolder, safeName) : safeName;
     const absolutePath = path.join(storageRoot, 'library', relativePath);
 
     const job = db.createJob({
@@ -182,31 +188,62 @@ app.get('/api/events', auth, (req, res) => {
   });
 });
 
-// Broadcaster for SSE
+// Broadcaster for SSE — sends progress for active jobs + triggers refresh on status change
+const _prevJobStatuses = new Map();
 setInterval(() => {
   if (sseClients.length === 0) return;
-  const jobs = db.getAllJobs().filter(j => j.status === 'downloading' || j.status === 'queued');
-  if (jobs.length > 0) {
-    const data = JSON.stringify(jobs);
+  const allJobs = db.getAllJobs();
+  const activeJobs = allJobs.filter(j => j.status === 'downloading' || j.status === 'queued');
+
+  // Detect jobs that changed status since last tick (e.g., completed/failed)
+  let statusChanged = false;
+  for (const job of allJobs) {
+    const prev = _prevJobStatuses.get(job.id);
+    if (prev !== undefined && prev !== job.status) {
+      statusChanged = true;
+    }
+    _prevJobStatuses.set(job.id, job.status);
+  }
+
+  if (activeJobs.length > 0) {
+    const data = JSON.stringify({ type: 'progress', jobs: activeJobs });
     sseClients.forEach(c => c.res.write(`data: ${data}\n\n`));
+  }
+
+  if (statusChanged) {
+    // Tell the dashboard to do a full reload
+    sseClients.forEach(c => c.res.write(`data: ${JSON.stringify({ type: 'refresh' })}\n\n`));
   }
 }, 1000);
 
-// Media Streaming with Range support
-app.get('/media/:filename', auth, (req, res) => {
-  const filename = req.params.filename;
+const MIME_TYPES = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg; codecs=opus',
+};
+
+// Media Streaming with Range support — supports subfolders via wildcard
+app.get('/media/*', auth, (req, res) => {
+  const filename = req.params[0];
   const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
-  const filePath = path.join(storageRoot, 'library', filename);
+  const libraryRoot = path.join(storageRoot, 'library');
+  const filePath = path.resolve(libraryRoot, filename);
 
   // Prevent path traversal
-  if (!filePath.startsWith(path.join(storageRoot, 'library'))) {
+  if (!filePath.startsWith(libraryRoot + path.sep) && filePath !== libraryRoot) {
     return res.status(403).send('Forbidden');
   }
 
   if (fs.existsSync(filePath)) {
     const stats = fs.statSync(filePath);
     const ext = path.extname(filename).toLowerCase();
-    const contentType = ext === '.m4a' || ext === '.mp3' ? 'audio/mpeg' : 'video/mp4';
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
     
     // View Tracking (debounced)
     const debounceHours = parseInt(process.env.MEDIA_VIEW_DEBOUNCE_HOURS, 10) || 6;
@@ -322,7 +359,7 @@ app.listen(port, '127.0.0.1', () => {
   console.log(`📍 Local Address: http://127.0.0.1:${port}`);
   console.log(`📂 Storage Root:  ${process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop'}`);
   console.log(`🛡️  Admin Auth:    ENABLED`);
-  console.log(`🔥 Rate Limiting:  ENABLED (5/hr)`);
+  console.log(`🔥 Rate Limiting:  ENABLED (100/hr)`);
   console.log('---------------------------------------------------------');
   
   // Log tool versions for debugging
