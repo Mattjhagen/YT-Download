@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
-const { dns } = require('dns').promises;
 const URL = require('url').URL;
 
 const PRIVATE_IP_RANGES = [
@@ -19,8 +18,8 @@ const PRIVATE_IP_RANGES = [
   /^fe80:/i
 ];
 
-const MAX_CONCURRENT_JOBS = parseInt(process.env.MEDIA_DROP_MAX_CONCURRENT_JOBS || '3', 10);
-const MAX_FILE_SIZE_BYTES = parseInt(process.env.MEDIA_DROP_MAX_FILE_SIZE_GB || '2', 10) * 1024 * 1024 * 1024;
+const MAX_CONCURRENT_JOBS = parseInt(process.env.MEDIA_DROP_MAX_CONCURRENT || '3', 10);
+const MAX_FILE_SIZE_BYTES = parseInt(process.env.MEDIA_DROP_MAX_FILE_SIZE_BYTES || String(2 * 1024 * 1024 * 1024), 10);
 
 function sanitizeFilename(name) {
   return name.replace(/[^a-zA-Z0-9\._-]/g, '_').substring(0, 255);
@@ -296,15 +295,28 @@ class Downloader {
     return new Promise((resolve, reject) => {
       let stderrData = '';
 
+      // CRITICAL: Must consume stdout — yt-dlp writes progress JSON here.
+      // Without this listener the pipe buffer fills (64KB) and yt-dlp blocks forever.
       child.stdout.on('data', (data) => {
-        const output = data.toString();
-        const match = output.match(/\{"percent":"\s*(.*)%"\}/);
-        if (match) {
-          const progress = parseFloat(match[1]);
-          this.db.updateJob(job.id, { progress_percent: progress });
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed.percent !== undefined) {
+              const pct = parseFloat(String(parsed.percent).replace('%', ''));
+              if (!isNaN(pct)) {
+                this.db.updateJob(job.id, { progress_percent: pct });
+              }
+            }
+          } catch (e) {
+            // Non-JSON line from yt-dlp, ignore
+          }
         }
       });
 
+      // Capture stderr for error reporting and logging
       child.stderr.on('data', (data) => {
         const msg = data.toString();
         stderrData += msg;
@@ -319,19 +331,37 @@ class Downloader {
       child.on('close', async (code) => {
         this.activeDownloads.delete(job.id);
         if (code === 0) {
-          const finalPath = path.join(finalDir, job.safe_filename);
+          // yt-dlp appends the real extension (e.g. .mp4) to the output path.
+          // Search for the actual file if the bare name doesn't exist.
+          let finalPath = path.join(finalDir, job.safe_filename);
+          if (!fs.existsSync(finalPath)) {
+            try {
+              const files = fs.readdirSync(finalDir).filter(f =>
+                path.basename(f, path.extname(f)) === job.safe_filename
+              );
+              if (files.length > 0) {
+                finalPath = path.join(finalDir, files[0]);
+              }
+            } catch (e) {
+              console.warn(`[Downloader] Could not scan library dir: ${e.message}`);
+            }
+          }
           if (fs.existsSync(finalPath)) {
             await this.updateMetadataAfterDownload(job, finalPath);
+          } else {
+            console.warn(`[Downloader] Could not find downloaded file at ${finalPath}`);
           }
           resolve();
         } else {
           let errorMsg = `yt-dlp failed (code ${code})`;
-          if (stderrData.includes('confirm you’re not a bot')) {
-              errorMsg = 'Bot check failed. Please verify cookies.';
+          if (stderrData.includes('Sign in to confirm') || stderrData.includes('not a bot') || stderrData.includes('confirm you’re not a bot')) {
+            errorMsg = 'YouTube Bot Check: Please upload cookies.txt (see README)';
+          } else if (stderrData.includes('Video unavailable')) {
+            errorMsg = 'Video unavailable or private';
           } else if (stderrData) {
-              // Extract the last useful line from stderr
-              const lines = stderrData.split('\n').filter(l => l.includes('ERROR:'));
-              if (lines.length > 0) errorMsg = lines[lines.length - 1].replace('ERROR: ', '').trim();
+            // Extract the last useful line from stderr
+            const lines = stderrData.split('\n').filter(l => l.includes('ERROR:'));
+            if (lines.length > 0) errorMsg = lines[lines.length - 1].replace('ERROR: ', '').trim();
           }
           reject(new Error(errorMsg));
         }
@@ -379,21 +409,73 @@ class Downloader {
   async downloadNative(job) {
     const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
     const tmpDir = path.join(storageRoot, 'tmp');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
     const finalDir = path.join(storageRoot, 'library');
     const tempPath = path.join(tmpDir, job.safe_filename);
     const file = fs.createWriteStream(tempPath);
     const protocol = job.url.startsWith('https') ? https : http;
 
     return new Promise((resolve, reject) => {
-      protocol.get(job.url, (response) => {
+      const req = protocol.get(job.url, (response) => {
+        if (response.statusCode === 301 || response.statusCode === 302) {
+          file.close();
+          fs.unlink(tempPath, () => {});
+          job = { ...job, url: response.headers.location };
+          this.downloadNative(job).then(resolve).catch(reject);
+          return;
+        }
+        if (response.statusCode !== 200) {
+          file.close();
+          fs.unlink(tempPath, () => {});
+          reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
+          return;
+        }
+
+        const totalBytes = parseInt(response.headers['content-length'], 10) || 0;
+        let downloadedBytes = 0;
+
         response.pipe(file);
+
+        response.on('data', (chunk) => {
+          downloadedBytes += chunk.length;
+          if (totalBytes > 0) {
+            const progress = (downloadedBytes / totalBytes) * 100;
+            this.db.updateJob(job.id, {
+              progress_percent: progress.toFixed(1),
+              downloaded_bytes: downloadedBytes,
+              total_bytes: totalBytes
+            });
+          }
+        });
+
         file.on('finish', () => {
           file.close();
+          if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
           const finalPath = path.join(finalDir, job.safe_filename);
           fs.renameSync(tempPath, finalPath);
+
+          const stats = fs.statSync(finalPath);
+          this.db.updateJob(job.id, {
+            file_size: stats.size,
+            absolute_path: finalPath,
+            relative_path: job.safe_filename
+          });
           resolve();
         });
-      }).on('error', (err) => {
+
+        file.on('error', (err) => {
+          fs.unlink(tempPath, () => reject(err));
+        });
+      });
+
+      req.setTimeout(30000, () => {
+        req.destroy();
+        fs.unlink(tempPath, () => {});
+        reject(new Error('Download connection timed out after 30 seconds'));
+      });
+
+      req.on('error', (err) => {
         fs.unlink(tempPath, () => reject(err));
       });
     });
@@ -410,10 +492,16 @@ class Downloader {
 
   async updateMetadataAfterDownload(job, finalPath) {
     const stats = fs.statSync(finalPath);
+    // Use the actual filename yt-dlp wrote (may differ from safe_filename by extension)
+    const actualFilename = path.basename(finalPath);
+    const actualRelativePath = job.relative_path
+      ? path.join(path.dirname(job.relative_path), actualFilename)
+      : actualFilename;
     const update = {
       file_size: stats.size,
       absolute_path: finalPath,
-      relative_path: job.relative_path || job.safe_filename,
+      safe_filename: actualFilename,
+      relative_path: actualRelativePath,
       updated_at: new Date().toISOString()
     };
 
