@@ -199,6 +199,18 @@ app.get('/api/files', auth, (req, res) => {
 app.listen(port, () => {
   console.log(`Media Drop server running at http://localhost:${port}`);
   
+  // Log tool versions for debugging
+  const { execSync } = require('child_process');
+  try {
+    const aria2Version = execSync('/usr/bin/aria2c --version | head -n 1').toString().trim();
+    console.log(`[System] ${aria2Version}`);
+  } catch (e) { console.error('[System] aria2c not found at /usr/bin/aria2c'); }
+  
+  try {
+    const ytdlVersion = execSync('/usr/local/bin/yt-dlp --version').toString().trim();
+    console.log(`[System] yt-dlp version: ${ytdlVersion}`);
+  } catch (e) { console.error('[System] yt-dlp not found at /usr/local/bin/yt-dlp'); }
+
   // Resume interrupted downloads on startup
   const interruptedJobs = db.getAllJobs().filter(j => j.status === 'downloading' || j.status === 'queued');
   if (interruptedJobs.length > 0) {

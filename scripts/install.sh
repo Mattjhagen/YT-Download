@@ -9,11 +9,16 @@ echo "🚀 Starting Media Drop installation..."
 # 0. Capture repository root
 REPO_ROOT=$(pwd)
 
-# 1. Update and install dependencies
+# 1. Update and install base dependencies
 sudo apt-get update
-sudo apt-get install -y nodejs aria2 sqlite3 samba curl yt-dlp
+sudo apt-get install -y nodejs aria2 sqlite3 samba curl
 
-# 2. Create directories
+# 2. Install latest yt-dlp binary from GitHub
+echo "⏬ Downloading latest yt-dlp..."
+sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
+
+# 3. Create directories
 sudo mkdir -p /opt/media-drop/app
 sudo mkdir -p /srv/media-drop/library
 sudo mkdir -p /srv/media-drop/tmp

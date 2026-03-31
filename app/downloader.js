@@ -35,15 +35,20 @@ class Downloader {
 
     const allowPrivate = process.env.MEDIA_DROP_ALLOW_PRIVATE_HOSTS === 'true';
     if (!allowPrivate) {
-      const addresses = await require('dns').promises.resolve4(parsed.hostname).catch(() => []);
-      const addresses6 = await require('dns').promises.resolve6(parsed.hostname).catch(() => []);
-      const allIPs = [...addresses, ...addresses6];
+        try {
+            const addresses = await require('dns').promises.resolve4(parsed.hostname).catch(() => []);
+            const addresses6 = await require('dns').promises.resolve6(parsed.hostname).catch(() => []);
+            const allIPs = [...addresses, ...addresses6];
 
-      for (const ip of allIPs) {
-        if (PRIVATE_IP_RANGES.some(range => range.test(ip))) {
-          throw new Error(`Access to private IP ${ip} is blocked.`);
+            for (const ip of allIPs) {
+                if (PRIVATE_IP_RANGES.some(range => range.test(ip))) {
+                    throw new Error(`Access to private IP ${ip} is blocked.`);
+                }
+            }
+        } catch (e) {
+            // If DNS fails, we lean on the side of caution or just let the download fail later
+            console.warn(`DNS validation failed for ${parsed.hostname}: ${e.message}`);
         }
-      }
     }
 
     // Check allowlist
@@ -57,9 +62,52 @@ class Downloader {
 
   async checkYtDlp() {
     return new Promise((resolve) => {
-      const proc = spawn('yt-dlp', ['--version']);
+      const proc = spawn('/usr/local/bin/yt-dlp', ['--version']);
       proc.on('error', () => resolve(false));
       proc.on('close', (code) => resolve(code === 0));
+    });
+  }
+
+  async checkAria2() {
+    return new Promise((resolve) => {
+      const proc = spawn('/usr/bin/aria2c', ['--version']);
+      proc.on('error', () => resolve(false));
+      proc.on('close', (code) => resolve(code === 0));
+    });
+  }
+
+  async getMetadata(url) {
+    const parsed = new URL(url);
+    const isYouTube = parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be');
+    
+    // For video platforms, use yt-dlp to get the title
+    if (isYouTube && await this.checkYtDlp()) {
+      return new Promise((resolve) => {
+        const proc = spawn('/usr/local/bin/yt-dlp', ['--get-title', '--skip-download', url]);
+        let title = '';
+        proc.stdout.on('data', (data) => title += data.toString());
+        proc.on('close', () => resolve(title.trim() || path.basename(parsed.pathname)));
+        proc.on('error', () => resolve(path.basename(parsed.pathname)));
+      });
+    }
+
+    // For direct files, try a HEAD request for Content-Disposition or basename
+    return new Promise((resolve) => {
+      try {
+          const protocol = url.startsWith('https') ? https : http;
+          const req = protocol.request(url, { method: 'HEAD' }, (res) => {
+            const disposition = res.headers['content-disposition'];
+            if (disposition && disposition.includes('filename=')) {
+              const match = disposition.match(/filename="?([^";]+)"?/);
+              if (match) return resolve(match[1]);
+            }
+            resolve(path.basename(parsed.pathname) || 'download');
+          });
+          req.on('error', () => resolve(path.basename(parsed.pathname) || 'download'));
+          req.end();
+      } catch (err) {
+          resolve(path.basename(parsed.pathname) || 'download');
+      }
     });
   }
 
@@ -101,8 +149,7 @@ class Downloader {
     const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
-    // Use yt-dlp to download. --get-filename helps if title is dynamic.
-    // For MVP, we use the safe_filename or let yt-dlp decide and we rename it.
+    const binary = '/usr/local/bin/yt-dlp';
     const args = [
       '--output', path.join(finalDir, job.safe_filename),
       '--no-playlist',
@@ -112,13 +159,13 @@ class Downloader {
       job.url
     ];
 
-    const child = spawn('yt-dlp', args);
+    console.log(`[yt-dlp] Starting download for job ${job.id}: ${job.url}`);
+    const child = spawn(binary, args);
     this.activeDownloads.set(job.id, child);
 
     return new Promise((resolve, reject) => {
       child.stdout.on('data', (data) => {
         const output = data.toString();
-        // Parse json progress from template: {"percent":" 25.4%"}
         const match = output.match(/\{"percent":"\s*(.*)%"\}/);
         if (match) {
           const progress = parseFloat(match[1]);
@@ -126,19 +173,29 @@ class Downloader {
         }
       });
 
+      child.stderr.on('data', (data) => {
+        console.error(`[yt-dlp] [stderr] job ${job.id}: ${data.toString()}`);
+      });
+
+      child.on('error', (err) => {
+        console.error(`[yt-dlp] Failed to start process for job ${job.id}:`, err);
+        this.activeDownloads.delete(job.id);
+        reject(err);
+      });
+
       child.on('close', (code) => {
         this.activeDownloads.delete(job.id);
+        console.log(`[yt-dlp] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
-          // Verify if filename was exact or changed
           const finalPath = path.join(finalDir, job.safe_filename);
-          // Sometimes yt-dlp appends .ext even if we give a path without it
-          // But our safe_filename should already have it.
-          const stats = fs.statSync(finalPath);
-          this.db.updateJob(job.id, {
-              file_size: stats.size,
-              absolute_path: finalPath,
-              relative_path: job.safe_filename
-          });
+          if (fs.existsSync(finalPath)) {
+            const stats = fs.statSync(finalPath);
+            this.db.updateJob(job.id, {
+                file_size: stats.size,
+                absolute_path: finalPath,
+                relative_path: job.safe_filename
+            });
+          }
           resolve();
         } else {
           reject(new Error(`yt-dlp exited with code ${code}`));
@@ -147,79 +204,61 @@ class Downloader {
     });
   }
 
-  async getMetadata(url) {
-    const parsed = new URL(url);
-    const isYouTube = parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be');
-    
-    // For video platforms, use yt-dlp to get the title
-    if (isYouTube && await this.checkYtDlp()) {
-      return new Promise((resolve) => {
-        const proc = spawn('yt-dlp', ['--get-title', '--skip-download', url]);
-        let title = '';
-        proc.stdout.on('data', (data) => title += data.toString());
-        proc.on('close', () => resolve(title.trim() || path.basename(parsed.pathname)));
-      });
-    }
-
-    // For direct files, try a HEAD request for Content-Disposition or basename
-    return new Promise((resolve) => {
-      const protocol = url.startsWith('https') ? https : http;
-      const req = protocol.request(url, { method: 'HEAD' }, (res) => {
-        const disposition = res.headers['content-disposition'];
-        if (disposition && disposition.includes('filename=')) {
-          const match = disposition.match(/filename="?([^";]+)"?/);
-          if (match) return resolve(match[1]);
-        }
-        resolve(path.basename(parsed.pathname) || 'download');
-      });
-      req.on('error', () => resolve(path.basename(parsed.pathname) || 'download'));
-      req.end();
-    });
-  }
-
-  async checkAria2() {
-    return new Promise((resolve) => {
-      const proc = spawn('aria2c', ['--version']);
-      proc.on('error', () => resolve(false));
-      proc.on('close', (code) => resolve(code === 0));
-    });
-  }
-
   async downloadAria2(job) {
-    const tempDir = process.env.MEDIA_DROP_STORAGE_ROOT + '/tmp';
-    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const tmpDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp');
+    const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
+    const binary = '/usr/bin/aria2c';
     const args = [
-      '--dir=' + tempDir,
-      '--out=' + job.safe_filename,
-      '--max-connection-per-server=4',
+      '--dir', tmpDir,
+      '--out', job.safe_filename,
+      '--continue=true',
+      '--max-connection-per-server=5',
       '--summary-interval=1',
       job.url
     ];
 
-    const child = spawn('aria2c', args);
+    console.log(`[aria2c] Starting download for job ${job.id}: ${job.url}`);
+    const child = spawn(binary, args);
     this.activeDownloads.set(job.id, child);
 
     return new Promise((resolve, reject) => {
       child.stdout.on('data', (data) => {
         const output = data.toString();
-        // Parse aria2c output for progress: [#id 1.2MiB/4.5MiB(26%) CN:1 DL:1.2MiB ETA:2s]
-        const match = output.match(/\((.*)%\).*DL:(.*)\sETA:(.*)\]/);
+        const match = output.match(/\((.*)%\)/);
         if (match) {
           const progress = parseFloat(match[1]);
-          const speed = match[2];
-          const eta = match[3];
-          this.db.updateJob(job.id, { 
-            progress_percent: progress,
-            error_message: `Speed: ${speed}, ETA: ${eta}` // Temporary status info
-          });
+          this.db.updateJob(job.id, { progress_percent: progress });
         }
+      });
+
+      child.stderr.on('data', (data) => {
+        console.error(`[aria2c] [stderr] job ${job.id}: ${data.toString()}`);
+      });
+
+      child.on('error', (err) => {
+        console.error(`[aria2c] Failed to start process for job ${job.id}:`, err);
+        this.activeDownloads.delete(job.id);
+        reject(err);
       });
 
       child.on('close', (code) => {
         this.activeDownloads.delete(job.id);
+        console.log(`[aria2c] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
-          this.finalizeFile(job);
+          const tmpPath = path.join(tmpDir, job.safe_filename);
+          const finalPath = path.join(finalDir, job.safe_filename);
+          if (fs.existsSync(tmpPath)) {
+            fs.renameSync(tmpPath, finalPath);
+            const stats = fs.statSync(finalPath);
+            this.db.updateJob(job.id, {
+              file_size: stats.size,
+              absolute_path: finalPath,
+              relative_path: job.safe_filename
+            });
+          }
           resolve();
         } else {
           reject(new Error(`aria2c exited with code ${code}`));
@@ -259,7 +298,17 @@ class Downloader {
 
         file.on('finish', () => {
           file.close();
-          this.finalizeFile(job);
+          const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
+          if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
+          const finalPath = path.join(finalDir, job.safe_filename);
+          fs.renameSync(tempPath, finalPath);
+          
+          const stats = fs.statSync(finalPath);
+          this.db.updateJob(job.id, {
+            file_size: stats.size,
+            absolute_path: finalPath,
+            relative_path: job.safe_filename
+          });
           resolve();
         });
 
@@ -269,22 +318,6 @@ class Downloader {
       }).on('error', (err) => {
         fs.unlink(tempPath, () => reject(err));
       });
-    });
-  }
-
-  finalizeFile(job) {
-    const tempPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp', job.safe_filename);
-    const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
-    if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
-    
-    const finalPath = path.join(finalDir, job.safe_filename);
-    fs.renameSync(tempPath, finalPath);
-    
-    const stats = fs.statSync(finalPath);
-    this.db.updateJob(job.id, {
-        file_size: stats.size,
-        absolute_path: finalPath,
-        relative_path: job.safe_filename
     });
   }
 
