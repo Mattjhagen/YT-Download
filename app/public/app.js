@@ -161,7 +161,14 @@ const App = {
         const protocol = window.location.protocol;
         const host = window.location.host;
         const fullUrl = `${protocol}//${host}${path}`;
-        window.location.href = `vlc://${fullUrl}`;
+        
+        // Using an anchor tag for better browser compatibility with protocol handlers
+        const link = document.createElement('a');
+        link.href = `vlc://${fullUrl}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
         this.showToast('Opening in VLC...');
     },
 
