@@ -133,7 +133,14 @@ class Downloader {
     // For video platforms, use yt-dlp to get the title
     if (isYouTube && await this.checkYtDlp()) {
       return new Promise((resolve) => {
-        const proc = spawn('/usr/local/bin/yt-dlp', ['--get-title', '--skip-download', url]);
+        const cookiesPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop', 'cookies.txt');
+        const args = ['--get-title', '--skip-download', '--js-runtimes', 'nodejs'];
+        if (fs.existsSync(cookiesPath)) {
+            args.push('--cookies', cookiesPath);
+        }
+        args.push(url);
+        
+        const proc = spawn('/usr/local/bin/yt-dlp', args);
         let title = '';
         proc.stdout.on('data', (data) => title += data.toString());
         proc.on('close', () => resolve(title.trim() || path.basename(parsed.pathname)));
@@ -223,14 +230,24 @@ class Downloader {
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
     const binary = '/usr/local/bin/yt-dlp';
+    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const cookiesPath = path.join(storageRoot, 'cookies.txt');
+    
     const args = [
       '--output', path.join(finalDir, job.safe_filename),
       '--no-playlist',
       '--newline',
       '--progress',
       '--progress-template', '{"percent":"%(progress._percent_str)s"}',
-      job.url
+      '--js-runtimes', 'nodejs'
     ];
+
+    if (fs.existsSync(cookiesPath)) {
+        console.log(`[yt-dlp] Using cookies from ${cookiesPath}`);
+        args.push('--cookies', cookiesPath);
+    }
+    
+    args.push(job.url);
 
     console.log(`[yt-dlp] Starting download for job ${job.id}: ${job.url}`);
     const child = spawn(binary, args);
@@ -271,8 +288,19 @@ class Downloader {
           }
           resolve();
         } else {
-          reject(new Error(`yt-dlp exited with code ${code}`));
+          let errorMsg = `yt-dlp exited with code ${code}`;
+          if (child.stderr_data && child.stderr_data.includes('Sign in to confirm you’re not a bot')) {
+              errorMsg = 'YouTube Bot Check: Please upload cookies.txt (see README)';
+          }
+          reject(new Error(errorMsg));
         }
+      });
+
+      // Capture stderr for better error reporting
+      child.stderr_data = '';
+      child.stderr.on('data', (data) => {
+          child.stderr_data += data.toString();
+          console.error(`[yt-dlp] [stderr] job ${job.id}: ${data.toString()}`);
       });
     });
   }

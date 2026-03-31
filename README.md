@@ -36,9 +36,14 @@ To keep the app running in the background:
 3. Reload systemd: `sudo systemctl daemon-reload`.
 4. Enable/Start: `sudo systemctl enable --now media-drop`.
 
-### 4. Health & Monitoring
-Check app status at: `http://127.0.0.1:8080/health`
-View audit logs directly in the SQLite database or via future UI updates.
+### 5. Resolving YouTube "Bot Check" (Sign in to confirm you're not a bot)
+If you see this error, YouTube is blocking your server IP. To fix:
+1. Install a browser extension for cookies (e.g., [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/ccmclokmhdnhblbhpcjallbdihbejdbe)).
+2. Log in to YouTube in your browser.
+3. Open the extension and click **Export** to save a `cookies.txt` file.
+4. Upload the file to your server:
+   `scp cookies.txt matt@192.168.1.107:/srv/media-drop/cookies.txt`
+5. The app will automatically detect and use these cookies for all future downloads.
 
 ## Features
 - **URL Submission**: Support for direct HTTP/HTTPS media URLs.
