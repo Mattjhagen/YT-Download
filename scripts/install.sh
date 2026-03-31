@@ -50,7 +50,22 @@ if [ ! -f .env ]; then
     echo "⚠️  Please edit /opt/media-drop/app/.env to set your ADMIN_PASSWORD!"
 fi
 
-# 8. Install Systemd Service
+# 8. Setup Samba Share
+if ! grep -q "\[media\]" /etc/samba/smb.conf; then
+    echo "Sharing library via Samba..."
+    sudo bash -c 'cat >> /etc/samba/smb.conf <<EOF
+
+[media]
+   path = /srv/media-drop/library
+   browseable = yes
+   read only = no
+   guest ok = yes
+   force user = media-drop
+EOF'
+    sudo systemctl restart smbd
+fi
+
+# 9. Install Systemd Service
 sudo cp "$REPO_ROOT/scripts/media-drop.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable media-drop
