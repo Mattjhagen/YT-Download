@@ -139,7 +139,7 @@ const App = {
                 ` : ''}
                 <div class="status-badge status-${job.status}">${job.status}</div>
                 <div class="job-actions">
-                    ${job.status === 'completed' ? `<button onclick="App.playInVlc('/media/${encodeURIComponent(job.relative_path)}')" class="primary-btn sm-btn vlc-btn">📺 Play</button>` : ''}
+                    ${job.status === 'completed' ? `<a href="vlc://${window.location.origin}/media/${encodeURIComponent(job.relative_path)}" class="primary-btn sm-btn vlc-btn" style="text-decoration:none; display:inline-flex; align-items:center;">📺 Play</a>` : ''}
                     ${job.status === 'failed' ? `<button onclick="App.retryJob('${job.id}')" class="primary-btn sm-btn">Retry</button>` : ''}
                     <button onclick="App.deleteJob('${job.id}')" class="text-btn">Delete</button>
                 </div>
@@ -182,7 +182,7 @@ const App = {
                     <div class="job-meta">${(f.size / 1024 / 1024).toFixed(2)} MB | ${new Date(f.mtime).toLocaleString()}</div>
                 </div>
                 <div class="file-actions">
-                    <button onclick="App.playInVlc('${f.url}')" class="icon-btn vlc-icon" title="Play in VLC">📺</button>
+                    <a href="vlc://${window.location.origin}${f.url}" class="icon-btn vlc-icon" title="Play in VLC" style="text-decoration:none;">📺</a>
                     <button onclick="App.copyToClipboard('${window.location.origin}${f.url}')" class="icon-btn" title="Copy Streaming URL">🔗</button>
                     <button onclick="App.copyToClipboard('${f.path}')" class="icon-btn" title="Copy Path">📂</button>
                     <button onclick="App.deleteFile('${f.name}')" class="icon-btn" title="Delete">🗑️</button>
