@@ -23,13 +23,13 @@ app.set('trust proxy', 1); // For Cloudflare/proxies to get real IP
 
 const limiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5, // limit each IP to 5 requests per windowMs
-  message: { error: 'Too many download requests from this IP, please try again after an hour' },
+  max: 5, // Limit each IP to 5 requests per hour
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
     return req.headers['cf-connecting-ip'] || req.ip;
-  }
+  },
+  validate: { xForwardedForHeader: false } // Disable this specific validation as we handle CF headers manually
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
