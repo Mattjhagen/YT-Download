@@ -56,6 +56,7 @@ class DBManager {
     try { this.db.exec('ALTER TABLE jobs ADD COLUMN last_viewed_at TEXT'); } catch(e) {}
     try { this.db.exec('ALTER TABLE jobs ADD COLUMN view_count INTEGER DEFAULT 0'); } catch(e) {}
     try { this.db.exec('ALTER TABLE jobs ADD COLUMN deleted_at TEXT'); } catch(e) {}
+    try { this.db.exec('ALTER TABLE jobs ADD COLUMN error_message TEXT'); } catch(e) {}
 
     // Create trigger for updated_at
     this.db.exec(`

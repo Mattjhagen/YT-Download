@@ -1,18 +1,25 @@
 {
   "manifest_version": 3,
   "name": "FinchWire Downloader",
-  "version": "1.0.0",
-  "description": "Premium media downloader and VLC integration for FinchWire.",
-  "permissions": ["downloads", "storage"],
-  "host_permissions": ["https://yt.finchwire.site/*"],
+  "version": "1.1.0",
+  "description": "Premium media downloader and VLC integration for FinchWire. Now supports remote YouTube downloads.",
+  "permissions": ["downloads", "storage", "notifications"],
+  "host_permissions": [
+    "*://yt.finchwire.site/*",
+    "https://*.youtube.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://yt.finchwire.site/*"],
+      "matches": ["*://yt.finchwire.site/*", "https://*.youtube.com/*"],
       "js": ["content.js"],
       "css": ["styles.css"]
     }
-  ]
+  ],
+  "options_page": "options.html",
+  "icons": {
+    "128": "icon128.png"
+  }
 }

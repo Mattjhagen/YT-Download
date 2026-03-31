@@ -1,65 +1,91 @@
-/* FinchWire Extension Styles */
+/* FinchWire Extension Styles 
+   Updated v2.2 with High-Priority Positioning */
 
 .finchwire-extension-controls {
-    display: inline-flex;
-    position: relative;
-    margin-left: 1rem;
-    vertical-align: middle;
+    display: inline-flex !important;
+    position: relative !important;
+    margin-right: 1rem !important;
+    vertical-align: middle !important;
+    visibility: visible !important;
+    z-index: 100 !important;
 }
 
 .fw-main-btn {
-    background-color: #3b82f6; 
-    color: white;
-    border: none;
-    border-radius: 6px;
-    padding: 6px 12px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    background-color: #3b82f6 !important; 
+    color: white !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 6px 12px !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    transition: all 0.2s !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1) !important;
+    display: block !important;
+}
+
+/* YouTube Specific styles */
+.fw-yt-btn {
+    background-color: #272727 !important; /* Matches YouTube dark theme buttons */
+    border: 1px solid #444 !important;
+    border-radius: 18px !important; /* Matches pill style */
+    padding: 0 16px !important;
+    height: 36px !important;
+    width: auto !important;
+    font-family: inherit !important;
+    font-size: 14px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: #f1f1f1 !important;
+    margin-right: 8px !important;
+    margin-top: 0 !important;
+}
+
+.fw-yt-btn:hover {
+    background-color: #3f3f3f !important;
 }
 
 .fw-main-btn:hover {
-    background-color: #2563eb;
-    transform: translateY(-1px);
+    background-color: #2563eb !important;
+    transform: translateY(-1px) !important;
 }
 
 .fw-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    background-color: #1e293b; /* Matches dark theme card-bg */
-    border: 1px solid #334155;
-    border-radius: 8px;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
-    z-index: 9999;
-    padding: 6px;
-    min-width: 180px;
-    margin-top: 8px;
-    overflow: hidden;
+    position: absolute !important;
+    top: 100% !important;
+    right: 0 !important;
+    background-color: #1e293b !important;
+    border: 1px solid #334155 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2) !important;
+    z-index: 999999 !important;
+    padding: 6px !important;
+    min-width: 180px !important;
+    margin-top: 8px !important;
+    overflow: hidden !important;
 }
 
 .fw-menu button {
-    display: block;
-    width: 100%;
-    background: transparent;
-    color: #f8fafc;
-    border: none;
-    padding: 10px 15px;
-    text-align: left;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    border-radius: 4px;
-    transition: background 0.15s;
+    display: block !important;
+    width: 100% !important;
+    background: transparent !important;
+    color: #f8fafc !important;
+    border: none !important;
+    padding: 10px 15px !important;
+    text-align: left !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    cursor: pointer !important;
+    border-radius: 4px !important;
+    transition: background 0.15s !important;
 }
 
 .fw-menu button:hover {
-    background-color: #334155;
-    color: white;
+    background-color: #334155 !important;
+    color: white !important;
 }
 
 .fw-menu.hidden {
-    display: none;
+    display: none !important;
 }

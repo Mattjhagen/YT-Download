@@ -40,7 +40,7 @@ app.use(limiter);
 
 // Auth middleware
 const auth = (req, res, next) => {
-  const sessionToken = req.cookies.session;
+  const sessionToken = req.cookies.session || req.headers['x-finchwire-token'];
   if (process.env.MEDIA_DROP_ADMIN_PASSWORD && sessionToken === process.env.MEDIA_DROP_ADMIN_PASSWORD) {
     return next();
   }
@@ -177,6 +177,7 @@ app.get('/api/events', auth, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // Crucial for Cloudflare/NGINX
   res.flushHeaders();
 
   const clientId = Date.now();
@@ -190,8 +191,12 @@ app.get('/api/events', auth, (req, res) => {
 
 // Broadcaster for SSE — sends progress for active jobs + triggers refresh on status change
 const _prevJobStatuses = new Map();
+let lastHeartbeat = Date.now();
+
 setInterval(() => {
   if (sseClients.length === 0) return;
+  
+  const now = Date.now();
   const allJobs = db.getAllJobs();
   const activeJobs = allJobs.filter(j => j.status === 'downloading' || j.status === 'queued');
 
@@ -205,9 +210,14 @@ setInterval(() => {
     _prevJobStatuses.set(job.id, job.status);
   }
 
+  // Send data if active jobs
   if (activeJobs.length > 0) {
     const data = JSON.stringify({ type: 'progress', jobs: activeJobs });
     sseClients.forEach(c => c.res.write(`data: ${data}\n\n`));
+  } else if (now - lastHeartbeat > 15000) {
+    // Send heartbeat (ping) every 15s if no jobs to keep Cloudflare happy
+    sseClients.forEach(c => c.res.write(`: ping\n\n`));
+    lastHeartbeat = now;
   }
 
   if (statusChanged) {
