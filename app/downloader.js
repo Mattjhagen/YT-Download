@@ -134,7 +134,7 @@ class Downloader {
     if (isYouTube && await this.checkYtDlp()) {
       return new Promise((resolve) => {
         const cookiesPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop', 'cookies.txt');
-        const args = ['--get-title', '--skip-download', '--js-runtimes', 'nodejs'];
+        const args = ['--get-title', '--skip-download', '--js-runtimes', 'node'];
         if (fs.existsSync(cookiesPath)) {
             args.push('--cookies', cookiesPath);
         }
@@ -239,7 +239,7 @@ class Downloader {
       '--newline',
       '--progress',
       '--progress-template', '{"percent":"%(progress._percent_str)s"}',
-      '--js-runtimes', 'nodejs'
+      '--js-runtimes', 'node'
     ];
 
     if (fs.existsSync(cookiesPath)) {
