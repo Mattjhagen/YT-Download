@@ -147,6 +147,36 @@ class Downloader {
     });
   }
 
+  async getMetadata(url) {
+    const parsed = new URL(url);
+    const isYouTube = parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be');
+    
+    // For video platforms, use yt-dlp to get the title
+    if (isYouTube && await this.checkYtDlp()) {
+      return new Promise((resolve) => {
+        const proc = spawn('yt-dlp', ['--get-title', '--skip-download', url]);
+        let title = '';
+        proc.stdout.on('data', (data) => title += data.toString());
+        proc.on('close', () => resolve(title.trim() || path.basename(parsed.pathname)));
+      });
+    }
+
+    // For direct files, try a HEAD request for Content-Disposition or basename
+    return new Promise((resolve) => {
+      const protocol = url.startsWith('https') ? https : http;
+      const req = protocol.request(url, { method: 'HEAD' }, (res) => {
+        const disposition = res.headers['content-disposition'];
+        if (disposition && disposition.includes('filename=')) {
+          const match = disposition.match(/filename="?([^";]+)"?/);
+          if (match) return resolve(match[1]);
+        }
+        resolve(path.basename(parsed.pathname) || 'download');
+      });
+      req.on('error', () => resolve(path.basename(parsed.pathname) || 'download'));
+      req.end();
+    });
+  }
+
   async checkAria2() {
     return new Promise((resolve) => {
       const proc = spawn('aria2c', ['--version']);

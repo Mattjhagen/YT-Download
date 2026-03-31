@@ -66,8 +66,14 @@ app.post('/api/downloads', auth, async (req, res) => {
     const parsedUrl = await downloader.validateURL(url);
     const domain = parsedUrl.hostname;
     
-    // Determine filename if not provided
-    let finalFilename = filename || path.basename(parsedUrl.pathname) || 'download';
+    // Fetch metadata if no filename provided
+    let finalTitle = filename;
+    if (!finalTitle) {
+        finalTitle = await downloader.getMetadata(url);
+    }
+    
+    // Determine filename
+    let finalFilename = finalTitle || 'download';
     if (!path.extname(finalFilename) && path.extname(parsedUrl.pathname)) {
         finalFilename += path.extname(parsedUrl.pathname);
     }
@@ -96,6 +102,23 @@ app.post('/api/downloads', auth, async (req, res) => {
     res.json(job);
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/downloads/:id/retry', auth, (req, res) => {
+  const { id } = req.params;
+  const job = db.getJob(id);
+  if (job) {
+    db.updateJob(id, { 
+      status: 'queued', 
+      progress_percent: 0, 
+      error_message: null,
+      updated_at: new Date().toISOString() 
+    });
+    downloader.startDownload(id);
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Job not found' });
   }
 });
 

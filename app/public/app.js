@@ -138,9 +138,20 @@ const App = {
                     <div class="job-percent">${Math.round(job.progress_percent || 0)}%</div>
                 ` : ''}
                 <div class="status-badge status-${job.status}">${job.status}</div>
+                ${job.status === 'failed' ? `<button onclick="App.retryJob('${job.id}')" class="primary-btn sm-btn">Retry</button>` : ''}
                 <button onclick="App.deleteJob('${job.id}')" class="text-btn">Delete</button>
             </div>
         `;
+    },
+
+    async retryJob(id) {
+        const res = await fetch(`/api/downloads/${id}/retry`, { method: 'POST' });
+        if (res.ok) {
+            this.showToast('Retrying download...');
+            this.loadDashboard();
+        } else {
+            this.showToast('Failed to retry', 'error');
+        }
     },
 
     async loadFiles() {
