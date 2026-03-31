@@ -1,0 +1,65 @@
+/* FinchWire Extension Styles */
+
+.finchwire-extension-controls {
+    display: inline-flex;
+    position: relative;
+    margin-left: 1rem;
+    vertical-align: middle;
+}
+
+.fw-main-btn {
+    background-color: #3b82f6; 
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+.fw-main-btn:hover {
+    background-color: #2563eb;
+    transform: translateY(-1px);
+}
+
+.fw-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background-color: #1e293b; /* Matches dark theme card-bg */
+    border: 1px solid #334155;
+    border-radius: 8px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+    z-index: 9999;
+    padding: 6px;
+    min-width: 180px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.fw-menu button {
+    display: block;
+    width: 100%;
+    background: transparent;
+    color: #f8fafc;
+    border: none;
+    padding: 10px 15px;
+    text-align: left;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+}
+
+.fw-menu button:hover {
+    background-color: #334155;
+    color: white;
+}
+
+.fw-menu.hidden {
+    display: none;
+}

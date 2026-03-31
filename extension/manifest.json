@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "FinchWire Downloader",
+  "version": "1.0.0",
+  "description": "Premium media downloader and VLC integration for FinchWire.",
+  "permissions": ["downloads", "storage"],
+  "host_permissions": ["https://yt.finchwire.site/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://yt.finchwire.site/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
+    }
+  ]
+}

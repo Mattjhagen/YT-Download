@@ -36,12 +36,26 @@ class DBManager {
         mime_type TEXT,
         file_size INTEGER DEFAULT 0,
         source_domain TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        completed_at DATETIME,
-        error_message TEXT
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        completed_at TEXT,
+        error_message TEXT,
+        width INTEGER,
+        height INTEGER,
+        is_audio INTEGER DEFAULT 0,
+        last_viewed_at TEXT,
+        view_count INTEGER DEFAULT 0,
+        deleted_at TEXT
       )
     `);
+
+    // Add columns if they don't exist (for existing DBs)
+    try { this.db.exec('ALTER TABLE jobs ADD COLUMN width INTEGER'); } catch(e) {}
+    try { this.db.exec('ALTER TABLE jobs ADD COLUMN height INTEGER'); } catch(e) {}
+    try { this.db.exec('ALTER TABLE jobs ADD COLUMN is_audio INTEGER DEFAULT 0'); } catch(e) {}
+    try { this.db.exec('ALTER TABLE jobs ADD COLUMN last_viewed_at TEXT'); } catch(e) {}
+    try { this.db.exec('ALTER TABLE jobs ADD COLUMN view_count INTEGER DEFAULT 0'); } catch(e) {}
+    try { this.db.exec('ALTER TABLE jobs ADD COLUMN deleted_at TEXT'); } catch(e) {}
 
     // Create trigger for updated_at
     this.db.exec(`
@@ -49,17 +63,31 @@ class DBManager {
       AFTER UPDATE ON jobs
       FOR EACH ROW
       BEGIN
-        UPDATE jobs SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+        UPDATE jobs SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = OLD.id;
       END
+    `);
+
+    // Create audit_logs table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        action TEXT NOT NULL,
+        url TEXT,
+        ip TEXT,
+        user_agent TEXT,
+        status TEXT,
+        details TEXT
+      )
     `);
   }
 
   createJob(jobData) {
     const stmt = this.db.prepare(`
       INSERT INTO jobs (
-        id, url, original_url, status, filename, safe_filename, relative_path, absolute_path, source_domain
+        id, url, original_url, status, filename, safe_filename, relative_path, absolute_path, source_domain, is_audio
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `);
     stmt.run(
@@ -71,7 +99,8 @@ class DBManager {
       jobData.safe_filename,
       jobData.relative_path,
       jobData.absolute_path,
-      jobData.source_domain
+      jobData.source_domain,
+      jobData.is_audio ? 1 : 0
     );
     return this.getJob(jobData.id);
   }
@@ -102,8 +131,80 @@ class DBManager {
         console.error(`Failed to delete file for job ${id}:`, e);
       }
     }
-    this.db.prepare('SELECT * FROM jobs WHERE id = ?').get(id); // Extra check not needed
     return this.db.prepare('DELETE FROM jobs WHERE id = ?').run(id);
+  }
+
+  logAction(action, data = {}) {
+    const stmt = this.db.prepare(`
+      INSERT INTO audit_logs (action, url, ip, user_agent, status, details)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      action,
+      data.url || null,
+      data.ip || null,
+      data.user_agent || null,
+      data.status || null,
+      data.details ? JSON.stringify(data.details) : null
+    );
+  }
+
+  updateView(id, debounceHours = 6) {
+    const job = this.getJob(id);
+    if (!job) return;
+
+    const now = new Date();
+    const lastView = job.last_viewed_at ? new Date(job.last_viewed_at) : null;
+    
+    // Check debounce window
+    if (lastView && (now - lastView) < (debounceHours * 60 * 60 * 1000)) {
+        return; // Don't update yet
+    }
+
+    this.db.prepare(`
+        UPDATE jobs 
+        SET last_viewed_at = ?, 
+            view_count = view_count + 1 
+        WHERE id = ?
+    `).run(now.toISOString(), id);
+  }
+
+  getExpiredJobs(daysThreshold = 30) {
+    const dateLimit = new Date();
+    dateLimit.setDate(dateLimit.getDate() - daysThreshold);
+    const limitIso = dateLimit.toISOString();
+
+    return this.db.prepare(`
+        SELECT * FROM jobs 
+        WHERE status = 'completed' 
+        AND deleted_at IS NULL
+        AND (
+            (last_viewed_at IS NOT NULL AND last_viewed_at < ?) OR
+            (last_viewed_at IS NULL AND created_at < ?)
+        )
+    `).all(limitIso, limitIso);
+  }
+
+  getJobByFilename(filename) {
+    return this.db.prepare(`
+        SELECT * FROM jobs 
+        WHERE safe_filename = ? OR relative_path = ? OR filename = ?
+        LIMIT 1
+    `).get(filename, filename, filename);
+  }
+
+  markJobDeleted(id) {
+    this.db.prepare(`
+        UPDATE jobs 
+        SET status = 'expired', 
+            deleted_at = ? 
+        WHERE id = ?
+    `).run(new Date().toISOString(), id);
+  }
+
+  getAuditLogs(limit = 100) {
+    const stmt = this.db.prepare('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT ?');
+    return stmt.all(limit);
   }
 }
 

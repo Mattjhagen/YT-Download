@@ -37,9 +37,14 @@
                 <div class="card submit-card">
                     <h2>Submit Media URL</h2>
                     <div class="form-group">
-                        <input type="text" id="media-url" placeholder="Enter media URL (http/https)">
-                        <input type="text" id="custom-filename" placeholder="Custom filename (optional)">
-                        <button id="submit-url-btn" class="primary-btn">Download</button>
+                        <div class="form-row">
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="is-audio">
+                                <span class="checkmark"></span>
+                                Audio only
+                            </label>
+                            <button id="submit-url-btn" class="primary-btn">Download</button>
+                        </div>
                     </div>
                 </div>
 
@@ -97,6 +102,20 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <div id="media-modal" class="modal-overlay hidden finchwire-media-root">
+        <div class="modal-content">
+            <button id="close-modal-btn" class="close-btn">&times;</button>
+            <div id="player-container"></div>
+            <div id="player-meta">
+                <h2 id="player-title"></h2>
+                <div class="player-actions">
+                    <a id="player-download-link" href="#" download class="primary-btn sm-btn secondary-btn">Download</a>
+                    <a id="player-vlc-link" href="#" class="primary-btn sm-btn vlc-btn">Open in VLC</a>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="toast-container"></div>

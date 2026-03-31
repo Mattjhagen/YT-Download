@@ -13,9 +13,14 @@ const PRIVATE_IP_RANGES = [
   /^192\.168\./,
   /^169\.254\./,
   /^::1$/,
+  /^0\.0\.0\.0$/,
+  /^::$/,
   /^fc00:/i,
   /^fe80:/i
 ];
+
+const MAX_CONCURRENT_JOBS = parseInt(process.env.MEDIA_DROP_MAX_CONCURRENT_JOBS || '3', 10);
+const MAX_FILE_SIZE_BYTES = parseInt(process.env.MEDIA_DROP_MAX_FILE_SIZE_GB || '2', 10) * 1024 * 1024 * 1024;
 
 function sanitizeFilename(name) {
   return name.replace(/[^a-zA-Z0-9\._-]/g, '_').substring(0, 255);
@@ -36,9 +41,22 @@ class Downloader {
     const allowPrivate = process.env.MEDIA_DROP_ALLOW_PRIVATE_HOSTS === 'true';
     if (!allowPrivate) {
         try {
-            const addresses = await require('dns').promises.resolve4(parsed.hostname).catch(() => []);
-            const addresses6 = await require('dns').promises.resolve6(parsed.hostname).catch(() => []);
-            const allIPs = [...addresses, ...addresses6];
+            let allIPs = [];
+            // If hostname is already an IP, add it. Otherwise resolve it.
+            const isIP = /^[\d\.]+$|:/.test(parsed.hostname);
+            if (isIP) {
+                allIPs.push(parsed.hostname);
+            } else {
+                const addresses = await require('dns').promises.resolve4(parsed.hostname).catch(() => []);
+                const addresses6 = await require('dns').promises.resolve6(parsed.hostname).catch(() => []);
+                allIPs = [...addresses, ...addresses6];
+                
+                // fallback to lookup for localhost/etc-hosts
+                if (allIPs.length === 0) {
+                    const lookup = await require('dns').promises.lookup(parsed.hostname).catch(() => null);
+                    if (lookup) allIPs.push(lookup.address);
+                }
+            }
 
             for (const ip of allIPs) {
                 if (PRIVATE_IP_RANGES.some(range => range.test(ip))) {
@@ -46,7 +64,7 @@ class Downloader {
                 }
             }
         } catch (e) {
-            // If DNS fails, we lean on the side of caution or just let the download fail later
+            if (e.message.includes('blocked')) throw e;
             console.warn(`DNS validation failed for ${parsed.hostname}: ${e.message}`);
         }
     }
@@ -57,20 +75,71 @@ class Downloader {
       throw new Error(`Domain ${parsed.hostname} is not in the allowlist.`);
     }
 
+    // Check file size via HEAD request if not a video platform
+    const isVideoPlatform = parsed.hostname.includes('youtube.com') || 
+                            parsed.hostname.includes('youtu.be') || 
+                            parsed.hostname.includes('vimeo.com');
+
+    if (!isVideoPlatform) {
+      try {
+        const size = await this.getFileSize(urlStr);
+        if (size > MAX_FILE_SIZE_BYTES) {
+          throw new Error(`File size (${(size / 1024 / 1024 / 1024).toFixed(2)} GB) exceeds the limit of ${process.env.MEDIA_DROP_MAX_FILE_SIZE_GB || '2'} GB.`);
+        }
+      } catch (err) {
+        console.warn(`Could not verify file size for ${urlStr}: ${err.message}`);
+      }
+    }
+
     return parsed;
   }
 
+  async getFileSize(url) {
+    return new Promise((resolve, reject) => {
+      const protocol = url.startsWith('https') ? https : http;
+      const req = protocol.request(url, { method: 'HEAD', timeout: 5000 }, (res) => {
+        const size = parseInt(res.headers['content-length'], 10);
+        resolve(isNaN(size) ? 0 : size);
+      });
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Timeout checking file size'));
+      });
+      req.end();
+    });
+  }
+
+  getToolPath(tool) {
+    const envPath = process.env[`MEDIA_DROP_${tool.toUpperCase().replace(/-/g, '_')}_PATH`];
+    if (envPath && fs.existsSync(envPath)) return envPath;
+
+    const commonPaths = [
+      `/opt/homebrew/bin/${tool}`,
+      `/usr/local/bin/${tool}`,
+      `/usr/bin/${tool}`,
+      tool // fallback to PATH
+    ];
+
+    for (const p of commonPaths) {
+      if (p === tool || fs.existsSync(p)) return p;
+    }
+    return tool;
+  }
+
   async checkYtDlp() {
+    const binary = this.getToolPath('yt-dlp');
     return new Promise((resolve) => {
-      const proc = spawn('/usr/local/bin/yt-dlp', ['--version']);
+      const proc = spawn(binary, ['--version']);
       proc.on('error', () => resolve(false));
       proc.on('close', (code) => resolve(code === 0));
     });
   }
 
   async checkAria2() {
+    const binary = this.getToolPath('aria2c');
     return new Promise((resolve) => {
-      const proc = spawn('/usr/bin/aria2c', ['--version']);
+      const proc = spawn(binary, ['--version']);
       proc.on('error', () => resolve(false));
       proc.on('close', (code) => resolve(code === 0));
     });
@@ -83,11 +152,35 @@ class Downloader {
     // For video platforms, use yt-dlp to get the title
     if (isYouTube && await this.checkYtDlp()) {
       return new Promise((resolve) => {
-        const proc = spawn('/usr/local/bin/yt-dlp', ['--get-title', '--skip-download', url]);
+        const cookiesPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop', 'cookies.txt');
+        const args = [
+          '--get-title', 
+          '--skip-download', 
+          '--js-runtime', 'node',
+          '--extractor-args', 'youtube:player-client=web_embedded,tv',
+          '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ];
+        if (fs.existsSync(cookiesPath)) {
+            args.push('--cookies', cookiesPath);
+        }
+        args.push(url);
+        
+        const proc = spawn(this.getToolPath('yt-dlp'), args);
         let title = '';
         proc.stdout.on('data', (data) => title += data.toString());
-        proc.on('close', () => resolve(title.trim() || path.basename(parsed.pathname)));
-        proc.on('error', () => resolve(path.basename(parsed.pathname)));
+        proc.on('close', () => {
+            let finalTitle = title.trim();
+            if (!finalTitle) {
+                // Fallback to video ID if title fails
+                const videoId = url.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/);
+                finalTitle = videoId ? `youtube_${videoId[1]}` : path.basename(parsed.pathname);
+            }
+            resolve(finalTitle);
+        });
+        proc.on('error', () => {
+            const videoId = url.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/);
+            resolve(videoId ? `youtube_${videoId[1]}` : path.basename(parsed.pathname));
+        });
       });
     }
 
@@ -112,6 +205,13 @@ class Downloader {
   }
 
   async startDownload(jobId) {
+    const activeCount = Array.from(this.activeDownloads.keys()).length;
+    if (activeCount >= MAX_CONCURRENT_JOBS) {
+      console.log(`[Downloader] Queueing job ${jobId} (Active: ${activeCount}/${MAX_CONCURRENT_JOBS})`);
+      this.db.updateJob(jobId, { status: 'queued' });
+      return;
+    }
+
     const job = this.db.getJob(jobId);
     if (!job) return;
 
@@ -142,6 +242,22 @@ class Downloader {
         error_message: error.message, 
         updated_at: new Date().toISOString() 
       });
+    } finally {
+      // Check for next job in queue
+      this.processQueue();
+    }
+  }
+
+  processQueue() {
+    const queuedJobs = this.db.getAllJobs().filter(j => j.status === 'queued');
+    if (queuedJobs.length > 0 && this.activeDownloads.size < MAX_CONCURRENT_JOBS) {
+        const nextJob = queuedJobs[queuedJobs.length - 1]; // Oldest first (ASC order usually, but getAllJobs is DESC)
+        // Correcting: find the oldest queued job
+        const oldestQueued = queuedJobs.sort((a,b) => new Date(a.created_at) - new Date(b.created_at))[0];
+        if (oldestQueued) {
+            console.log(`[Downloader] Picking up queued job: ${oldestQueued.id}`);
+            this.startDownload(oldestQueued.id);
+        }
     }
   }
 
@@ -149,15 +265,39 @@ class Downloader {
     const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
-    const binary = '/usr/local/bin/yt-dlp';
+    const binary = this.getToolPath('yt-dlp');
+    const ffmpegPath = this.getToolPath('ffmpeg');
+    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const cookiesPath = path.join(storageRoot, 'cookies.txt');
+    
+    // Quality Strategy: bv*+ba/b for video, ba/b for audio-only
+    const formatStr = job.is_audio ? 'ba/b' : 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b';
+    
     const args = [
       '--output', path.join(finalDir, job.safe_filename),
+      '--format', formatStr,
       '--no-playlist',
       '--newline',
       '--progress',
       '--progress-template', '{"percent":"%(progress._percent_str)s"}',
-      job.url
+      '--js-runtime', 'node',
+      '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv',
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      '--ffmpeg-location', ffmpegPath
     ];
+
+    if (job.is_audio) {
+      args.push('--extract-audio', '--audio-format', 'm4a', '--audio-quality', '0');
+    } else {
+      args.push('--merge-output-format', 'mp4');
+    }
+
+    if (fs.existsSync(cookiesPath)) {
+        console.log(`[yt-dlp] Using cookies from ${cookiesPath}`);
+        args.push('--cookies', cookiesPath);
+    }
+    
+    args.push(job.url);
 
     console.log(`[yt-dlp] Starting download for job ${job.id}: ${job.url}`);
     const child = spawn(binary, args);
@@ -183,23 +323,30 @@ class Downloader {
         reject(err);
       });
 
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
         this.activeDownloads.delete(job.id);
         console.log(`[yt-dlp] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
           const finalPath = path.join(finalDir, job.safe_filename);
           if (fs.existsSync(finalPath)) {
-            const stats = fs.statSync(finalPath);
-            this.db.updateJob(job.id, {
-                file_size: stats.size,
-                absolute_path: finalPath,
-                relative_path: job.safe_filename
-            });
+            // Extract precise metadata after download
+            await this.updateMetadataAfterDownload(job, finalPath);
           }
           resolve();
         } else {
-          reject(new Error(`yt-dlp exited with code ${code}`));
+          let errorMsg = `yt-dlp exited with code ${code}`;
+          if (child.stderr_data && child.stderr_data.includes('Sign in to confirm you’re not a bot')) {
+              errorMsg = 'YouTube Bot Check: Please upload cookies.txt (see README)';
+          }
+          reject(new Error(errorMsg));
         }
+      });
+
+      // Capture stderr for better error reporting
+      child.stderr_data = '';
+      child.stderr.on('data', (data) => {
+          child.stderr_data += data.toString();
+          console.error(`[yt-dlp] [stderr] job ${job.id}: ${data.toString()}`);
       });
     });
   }
@@ -210,7 +357,7 @@ class Downloader {
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
-    const binary = '/usr/bin/aria2c';
+    const binary = this.getToolPath('aria2c');
     const args = [
       '--dir', tmpDir,
       '--out', job.safe_filename,
@@ -244,7 +391,7 @@ class Downloader {
         reject(err);
       });
 
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
         this.activeDownloads.delete(job.id);
         console.log(`[aria2c] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
@@ -252,12 +399,8 @@ class Downloader {
           const finalPath = path.join(finalDir, job.safe_filename);
           if (fs.existsSync(tmpPath)) {
             fs.renameSync(tmpPath, finalPath);
-            const stats = fs.statSync(finalPath);
-            this.db.updateJob(job.id, {
-              file_size: stats.size,
-              absolute_path: finalPath,
-              relative_path: job.safe_filename
-            });
+            // Extract precise metadata after download
+            await this.updateMetadataAfterDownload(job, finalPath);
           }
           resolve();
         } else {
@@ -268,7 +411,10 @@ class Downloader {
   }
 
   async downloadNative(job) {
-    const tempPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp', job.safe_filename);
+    const tmpDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    
+    const tempPath = path.join(tmpDir, job.safe_filename);
     const file = fs.createWriteStream(tempPath);
     const protocol = job.url.startsWith('https') ? https : http;
 
@@ -328,6 +474,41 @@ class Downloader {
       this.activeDownloads.delete(jobId);
       this.db.updateJob(jobId, { status: 'cancelled' });
     }
+  }
+
+  async updateMetadataAfterDownload(job, finalPath) {
+    const stats = fs.statSync(finalPath);
+    const update = {
+      file_size: stats.size,
+      absolute_path: finalPath,
+      relative_path: job.relative_path || job.safe_filename,
+      updated_at: new Date().toISOString()
+    };
+
+    // Try to get resolution and codecs using ffprobe or yt-dlp
+    try {
+      const binary = this.getToolPath('yt-dlp');
+      const args = ['--print-json', '--skip-download', job.url];
+      const cookiesPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop', 'cookies.txt');
+      if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
+      
+      const proc = spawn(binary, args);
+      let jsonStr = '';
+      proc.stdout.on('data', (d) => jsonStr += d.toString());
+      
+      await new Promise((resolve) => proc.on('close', resolve));
+      
+      const info = JSON.parse(jsonStr);
+      update.width = info.width;
+      update.height = info.height;
+      update.mime_type = info.ext ? `media/${info.ext}` : null;
+      
+      console.log(`[Downloader] Metadata for job ${job.id}: ${info.width}x${info.height}, ext: ${info.ext}, size: ${stats.size} bytes`);
+    } catch (e) {
+      console.warn(`[Downloader] Could not extract detailed metadata: ${e.message}`);
+    }
+
+    this.db.updateJob(job.id, update);
   }
 }
 
