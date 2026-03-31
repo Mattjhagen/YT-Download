@@ -20,6 +20,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'REMOTE_DOWNLOAD':
             handleRemoteDownload(message.url, message.filename, sendResponse);
             return true; // Keep message channel open for async response
+
+        case 'OPEN_OPTIONS':
+            chrome.runtime.openOptionsPage();
+            break;
             
         case 'COPY_URL':
             // Handled in content script

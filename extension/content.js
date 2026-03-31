@@ -1,12 +1,12 @@
 // FinchWire Chrome Extension Content Script
-console.log('🐦 FinchWire v1.1.0 Ready (YouTube Support Enabled)');
+console.log('🐦 FinchWire v1.1.2 Ready (YouTube Support Enhanced)');
 
 const INJECTION_CLASS = 'finchwire-injected';
 const IS_YOUTUBE = window.location.hostname.includes('youtube.com');
 
 // 1. FINCHWIRE APP INJECTION
 function injectFinchWireControls(element) {
-    if (element.classList.contains(INJECTION_CLASS)) return;
+    if (!element || element.classList.contains(INJECTION_CLASS)) return;
     
     let mediaUrl = element.getAttribute('data-media-url');
     let title = element.getAttribute('data-media-title');
@@ -88,19 +88,34 @@ function injectFinchWireControls(element) {
 
 // 2. YOUTUBE INJECTION
 function injectYouTubeControls() {
-    // Target YouTube's button bar
-    const actionBar = document.querySelector('#top-level-buttons-computed');
+    if (!IS_YOUTUBE) return;
+
+    // Try multiple selectors for the action bar
+    const selectors = [
+        'ytd-watch-metadata #top-level-buttons-computed',
+        'ytd-menu-renderer #top-level-buttons-computed',
+        '#top-level-buttons-computed',
+        '#actions-inner #menu ytd-menu-renderer'
+    ];
+
+    let actionBar = null;
+    for (const selector of selectors) {
+        actionBar = document.querySelector(selector);
+        if (actionBar) break;
+    }
+
     if (!actionBar || actionBar.querySelector('.fw-yt-btn')) return;
+
+    console.log('🐦 [YouTube] Found action bar, injecting button...');
 
     const videoUrl = window.location.href;
     const videoTitle = document.querySelector('h1.ytd-video-primary-info-renderer')?.innerText || 
+                       document.querySelector('yt-formatted-string.ytd-video-primary-info-renderer')?.innerText ||
                        document.querySelector('meta[name="title"]')?.content || 
                        "YouTube Video";
 
     const btn = document.createElement('button');
     btn.className = 'fw-main-btn fw-yt-btn';
-    btn.style.marginLeft = '8px';
-    btn.style.height = '36px'; // Matches YT button height
     btn.innerHTML = '🐦 Remote Download';
     
     btn.onclick = (e) => {
@@ -110,15 +125,21 @@ function injectYouTubeControls() {
         
         chrome.runtime.sendMessage({ 
             type: 'REMOTE_DOWNLOAD', 
-            url: videoUrl, 
+            url: window.location.href, // Always use current URL
             filename: videoTitle 
         }, (response) => {
             if (response && response.success) {
                 btn.innerText = '✅ Sent to Server';
                 btn.style.backgroundColor = '#10b981';
             } else {
-                btn.innerText = '❌ Failed (Set URL in Options)';
+                btn.innerText = '❌ Setup Required';
                 btn.style.backgroundColor = '#ef4444';
+                // Prompt to check options if failed
+                if (response && response.error === 'Configuration missing') {
+                    if (confirm('FinchWire: Server URL or Password not set. Open settings?')) {
+                        chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS' });
+                    }
+                }
             }
             setTimeout(() => {
                 btn.innerText = '🐦 Remote Download';
@@ -128,7 +149,14 @@ function injectYouTubeControls() {
         });
     };
 
-    actionBar.appendChild(btn);
+    // Inject into the list
+    if (actionBar.id === 'top-level-buttons-computed') {
+        actionBar.appendChild(btn);
+    } else {
+        // Fallback for different container structures
+        const list = actionBar.querySelector('#top-level-buttons-computed') || actionBar;
+        list.appendChild(btn);
+    }
 }
 
 // 3. COMMON LOGIC
@@ -151,8 +179,12 @@ observer.observe(document.body, { childList: true, subtree: true });
 
 // YouTube SPA detection
 if (IS_YOUTUBE) {
-    window.addEventListener('yt-navigate-finish', injectYouTubeControls);
-    injectYouTubeControls();
+    window.addEventListener('yt-navigate-finish', () => {
+        console.log('🐦 [YouTube] Navigation finished, re-injecting...');
+        setTimeout(injectYouTubeControls, 1000);
+    });
+    // Initial load
+    setTimeout(injectYouTubeControls, 2000);
 } else {
     document.querySelectorAll('.job-item, .finchwire-media-root').forEach(injectFinchWireControls);
 }

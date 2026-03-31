@@ -24,6 +24,28 @@
     display: block !important;
 }
 
+/* YouTube Specific styles */
+.fw-yt-btn {
+    background-color: #272727 !important; /* Matches YouTube dark theme buttons */
+    border: 1px solid #444 !important;
+    border-radius: 18px !important; /* Matches pill style */
+    padding: 0 16px !important;
+    height: 36px !important;
+    width: auto !important;
+    font-family: inherit !important;
+    font-size: 14px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: #f1f1f1 !important;
+    margin-right: 8px !important;
+    margin-top: 0 !important;
+}
+
+.fw-yt-btn:hover {
+    background-color: #3f3f3f !important;
+}
+
 .fw-main-btn:hover {
     background-color: #2563eb !important;
     transform: translateY(-1px) !important;
