@@ -17,7 +17,7 @@ This app is now hardened for public exposure via **Cloudflare Tunnel**.
 Before traffic even reaches your server, you should require a login via **Cloudflare Access**.
 1. Go to **Cloudflare Zero Trust** dashboard.
 2. Navigate to **Access > Applications**.
-3. Add a new application for `media.finchwire.site`.
+3. Add a new application for `media.p3lending.space`.
 4. Create a policy to allow only your email (e.g., `matt@yourdomain.com`).
 5. This ensures the app is invisible to the public internet except for authorized users.
 
