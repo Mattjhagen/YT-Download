@@ -42,7 +42,6 @@ class Downloader {
     if (!allowPrivate) {
         try {
             let allIPs = [];
-            // If hostname is already an IP, add it. Otherwise resolve it.
             const isIP = /^[\d\.]+$|:/.test(parsed.hostname);
             if (isIP) {
                 allIPs.push(parsed.hostname);
@@ -50,8 +49,6 @@ class Downloader {
                 const addresses = await require('dns').promises.resolve4(parsed.hostname).catch(() => []);
                 const addresses6 = await require('dns').promises.resolve6(parsed.hostname).catch(() => []);
                 allIPs = [...addresses, ...addresses6];
-                
-                // fallback to lookup for localhost/etc-hosts
                 if (allIPs.length === 0) {
                     const lookup = await require('dns').promises.lookup(parsed.hostname).catch(() => null);
                     if (lookup) allIPs.push(lookup.address);
@@ -69,13 +66,11 @@ class Downloader {
         }
     }
 
-    // Check allowlist
     const allowedDomains = (process.env.MEDIA_DROP_ALLOWED_DOMAINS || '').split(',').filter(Boolean);
     if (allowedDomains.length > 0 && !allowedDomains.includes(parsed.hostname)) {
       throw new Error(`Domain ${parsed.hostname} is not in the allowlist.`);
     }
 
-    // Check file size via HEAD request if not a video platform
     const isVideoPlatform = parsed.hostname.includes('youtube.com') || 
                             parsed.hostname.includes('youtu.be') || 
                             parsed.hostname.includes('vimeo.com');
@@ -118,7 +113,7 @@ class Downloader {
       `/opt/homebrew/bin/${tool}`,
       `/usr/local/bin/${tool}`,
       `/usr/bin/${tool}`,
-      tool // fallback to PATH
+      tool
     ];
 
     for (const p of commonPaths) {
@@ -128,18 +123,16 @@ class Downloader {
   }
 
   async checkYtDlp() {
-    const binary = this.getToolPath('yt-dlp');
     return new Promise((resolve) => {
-      const proc = spawn(binary, ['--version']);
+      const proc = spawn(this.getToolPath('yt-dlp'), ['--version']);
       proc.on('error', () => resolve(false));
       proc.on('close', (code) => resolve(code === 0));
     });
   }
 
   async checkAria2() {
-    const binary = this.getToolPath('aria2c');
     return new Promise((resolve) => {
-      const proc = spawn(binary, ['--version']);
+      const proc = spawn(this.getToolPath('aria2c'), ['--version']);
       proc.on('error', () => resolve(false));
       proc.on('close', (code) => resolve(code === 0));
     });
@@ -149,20 +142,20 @@ class Downloader {
     const parsed = new URL(url);
     const isYouTube = parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be');
     
-    // For video platforms, use yt-dlp to get the title
     if (isYouTube && await this.checkYtDlp()) {
       return new Promise((resolve) => {
-        const cookiesPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop', 'cookies.txt');
+        const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+        const cookiesPath = path.join(storageRoot, 'cookies.txt');
         const args = [
           '--get-title', 
           '--skip-download', 
-          '--js-runtime', 'node',
-          '--extractor-args', 'youtube:player-client=web_embedded,tv',
-          '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          '--no-warnings',
+          '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv,web',
+          '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          '--add-header', 'Accept-Language:en-US,en;q=0.9',
+          '--add-header', 'Referer:https://www.youtube.com/'
         ];
-        if (fs.existsSync(cookiesPath)) {
-            args.push('--cookies', cookiesPath);
-        }
+        if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
         args.push(url);
         
         const proc = spawn(this.getToolPath('yt-dlp'), args);
@@ -171,7 +164,6 @@ class Downloader {
         proc.on('close', () => {
             let finalTitle = title.trim();
             if (!finalTitle) {
-                // Fallback to video ID if title fails
                 const videoId = url.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/);
                 finalTitle = videoId ? `youtube_${videoId[1]}` : path.basename(parsed.pathname);
             }
@@ -184,7 +176,6 @@ class Downloader {
       });
     }
 
-    // For direct files, try a HEAD request for Content-Disposition or basename
     return new Promise((resolve) => {
       try {
           const protocol = url.startsWith('https') ? https : http;
@@ -205,17 +196,16 @@ class Downloader {
   }
 
   async startDownload(jobId) {
+    const job = this.db.getJob(jobId);
+    if (!job) return;
+
     const activeCount = Array.from(this.activeDownloads.keys()).length;
     if (activeCount >= MAX_CONCURRENT_JOBS) {
-      console.log(`[Downloader] Queueing job ${jobId} (Active: ${activeCount}/${MAX_CONCURRENT_JOBS})`);
       this.db.updateJob(jobId, { status: 'queued' });
       return;
     }
 
-    const job = this.db.getJob(jobId);
-    if (!job) return;
-
-    this.db.updateJob(jobId, { status: 'downloading', updated_at: new Date().toISOString() });
+    this.db.updateJob(jobId, { status: 'downloading', updated_at: new Date().toISOString(), error_message: null });
 
     try {
       const parsed = new URL(job.url);
@@ -243,7 +233,6 @@ class Downloader {
         updated_at: new Date().toISOString() 
       });
     } finally {
-      // Check for next job in queue
       this.processQueue();
     }
   }
@@ -251,8 +240,6 @@ class Downloader {
   processQueue() {
     const queuedJobs = this.db.getAllJobs().filter(j => j.status === 'queued');
     if (queuedJobs.length > 0 && this.activeDownloads.size < MAX_CONCURRENT_JOBS) {
-        const nextJob = queuedJobs[queuedJobs.length - 1]; // Oldest first (ASC order usually, but getAllJobs is DESC)
-        // Correcting: find the oldest queued job
         const oldestQueued = queuedJobs.sort((a,b) => new Date(a.created_at) - new Date(b.created_at))[0];
         if (oldestQueued) {
             console.log(`[Downloader] Picking up queued job: ${oldestQueued.id}`);
@@ -262,15 +249,15 @@ class Downloader {
   }
 
   async downloadYtDlp(job) {
-    const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
+    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const finalDir = path.join(storageRoot, 'library');
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
     const binary = this.getToolPath('yt-dlp');
     const ffmpegPath = this.getToolPath('ffmpeg');
-    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
     const cookiesPath = path.join(storageRoot, 'cookies.txt');
     
-    // Quality Strategy: bv*+ba/b for video, ba/b for audio-only
+    // Quality Strategy: Best available MP4 combination
     const formatStr = job.is_audio ? 'ba/b' : 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b';
     
     const args = [
@@ -280,9 +267,10 @@ class Downloader {
       '--newline',
       '--progress',
       '--progress-template', '{"percent":"%(progress._percent_str)s"}',
-      '--js-runtime', 'node',
-      '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv',
-      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv,web,ios',
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      '--add-header', 'Accept-Language:en-US,en;q=0.9',
+      '--add-header', 'Referer:https://www.youtube.com/',
       '--ffmpeg-location', ffmpegPath
     ];
 
@@ -293,17 +281,19 @@ class Downloader {
     }
 
     if (fs.existsSync(cookiesPath)) {
-        console.log(`[yt-dlp] Using cookies from ${cookiesPath}`);
+        console.log(`[yt-dlp] Using cookies at ${cookiesPath}`);
         args.push('--cookies', cookiesPath);
     }
     
     args.push(job.url);
 
-    console.log(`[yt-dlp] Starting download for job ${job.id}: ${job.url}`);
+    console.log(`[yt-dlp] Starting job ${job.id}: ${job.url}`);
     const child = spawn(binary, args);
     this.activeDownloads.set(job.id, child);
 
     return new Promise((resolve, reject) => {
+      let stderrData = '';
+
       child.stdout.on('data', (data) => {
         const output = data.toString();
         const match = output.match(/\{"percent":"\s*(.*)%"\}/);
@@ -314,152 +304,92 @@ class Downloader {
       });
 
       child.stderr.on('data', (data) => {
-        console.error(`[yt-dlp] [stderr] job ${job.id}: ${data.toString()}`);
+        const msg = data.toString();
+        stderrData += msg;
+        console.error(`[yt-dlp] [stderr] job ${job.id}: ${msg}`);
       });
 
       child.on('error', (err) => {
-        console.error(`[yt-dlp] Failed to start process for job ${job.id}:`, err);
         this.activeDownloads.delete(job.id);
         reject(err);
       });
 
       child.on('close', async (code) => {
         this.activeDownloads.delete(job.id);
-        console.log(`[yt-dlp] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
           const finalPath = path.join(finalDir, job.safe_filename);
           if (fs.existsSync(finalPath)) {
-            // Extract precise metadata after download
             await this.updateMetadataAfterDownload(job, finalPath);
           }
           resolve();
         } else {
-          let errorMsg = `yt-dlp exited with code ${code}`;
-          if (child.stderr_data && child.stderr_data.includes('Sign in to confirm you’re not a bot')) {
-              errorMsg = 'YouTube Bot Check: Please upload cookies.txt (see README)';
+          let errorMsg = `yt-dlp failed (code ${code})`;
+          if (stderrData.includes('confirm you’re not a bot')) {
+              errorMsg = 'Bot check failed. Please verify cookies.';
+          } else if (stderrData) {
+              // Extract the last useful line from stderr
+              const lines = stderrData.split('\n').filter(l => l.includes('ERROR:'));
+              if (lines.length > 0) errorMsg = lines[lines.length - 1].replace('ERROR: ', '').trim();
           }
           reject(new Error(errorMsg));
         }
-      });
-
-      // Capture stderr for better error reporting
-      child.stderr_data = '';
-      child.stderr.on('data', (data) => {
-          child.stderr_data += data.toString();
-          console.error(`[yt-dlp] [stderr] job ${job.id}: ${data.toString()}`);
       });
     });
   }
 
   async downloadAria2(job) {
-    const tmpDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp');
-    const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
+    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const tmpDir = path.join(storageRoot, 'tmp');
+    const finalDir = path.join(storageRoot, 'library');
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
-    const binary = this.getToolPath('aria2c');
     const args = [
       '--dir', tmpDir,
       '--out', job.safe_filename,
       '--continue=true',
       '--max-connection-per-server=5',
-      '--summary-interval=1',
       job.url
     ];
 
-    console.log(`[aria2c] Starting download for job ${job.id}: ${job.url}`);
-    const child = spawn(binary, args);
+    const child = spawn(this.getToolPath('aria2c'), args);
     this.activeDownloads.set(job.id, child);
 
     return new Promise((resolve, reject) => {
       child.stdout.on('data', (data) => {
-        const output = data.toString();
-        const match = output.match(/\((.*)%\)/);
-        if (match) {
-          const progress = parseFloat(match[1]);
-          this.db.updateJob(job.id, { progress_percent: progress });
-        }
+        const match = data.toString().match(/\((.*)%\)/);
+        if (match) this.db.updateJob(job.id, { progress_percent: parseFloat(match[1]) });
       });
 
-      child.stderr.on('data', (data) => {
-        console.error(`[aria2c] [stderr] job ${job.id}: ${data.toString()}`);
-      });
-
-      child.on('error', (err) => {
-        console.error(`[aria2c] Failed to start process for job ${job.id}:`, err);
+      child.on('close', (code) => {
         this.activeDownloads.delete(job.id);
-        reject(err);
-      });
-
-      child.on('close', async (code) => {
-        this.activeDownloads.delete(job.id);
-        console.log(`[aria2c] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
           const tmpPath = path.join(tmpDir, job.safe_filename);
           const finalPath = path.join(finalDir, job.safe_filename);
-          if (fs.existsSync(tmpPath)) {
-            fs.renameSync(tmpPath, finalPath);
-            // Extract precise metadata after download
-            await this.updateMetadataAfterDownload(job, finalPath);
-          }
+          fs.renameSync(tmpPath, finalPath);
           resolve();
         } else {
-          reject(new Error(`aria2c exited with code ${code}`));
+          reject(new Error(`aria2c failed (code ${code})`));
         }
       });
     });
   }
 
   async downloadNative(job) {
-    const tmpDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp');
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    
+    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const tmpDir = path.join(storageRoot, 'tmp');
+    const finalDir = path.join(storageRoot, 'library');
     const tempPath = path.join(tmpDir, job.safe_filename);
     const file = fs.createWriteStream(tempPath);
     const protocol = job.url.startsWith('https') ? https : http;
 
     return new Promise((resolve, reject) => {
       protocol.get(job.url, (response) => {
-        if (response.statusCode !== 200) {
-          reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
-          return;
-        }
-
-        const totalBytes = parseInt(response.headers['content-length'], 10) || 0;
-        let downloadedBytes = 0;
-
         response.pipe(file);
-
-        response.on('data', (chunk) => {
-          downloadedBytes += chunk.length;
-          if (totalBytes > 0) {
-            const progress = (downloadedBytes / totalBytes) * 100;
-            this.db.updateJob(job.id, { 
-              progress_percent: progress.toFixed(1),
-              downloaded_bytes: downloadedBytes,
-              total_bytes: totalBytes
-            });
-          }
-        });
-
         file.on('finish', () => {
           file.close();
-          const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
-          if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
           const finalPath = path.join(finalDir, job.safe_filename);
           fs.renameSync(tempPath, finalPath);
-          
-          const stats = fs.statSync(finalPath);
-          this.db.updateJob(job.id, {
-            file_size: stats.size,
-            absolute_path: finalPath,
-            relative_path: job.safe_filename
-          });
           resolve();
-        });
-
-        file.on('error', (err) => {
-          fs.unlink(tempPath, () => reject(err));
         });
       }).on('error', (err) => {
         fs.unlink(tempPath, () => reject(err));
@@ -485,27 +415,24 @@ class Downloader {
       updated_at: new Date().toISOString()
     };
 
-    // Try to get resolution and codecs using ffprobe or yt-dlp
     try {
       const binary = this.getToolPath('yt-dlp');
+      const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+      const cookiesPath = path.join(storageRoot, 'cookies.txt');
       const args = ['--print-json', '--skip-download', job.url];
-      const cookiesPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop', 'cookies.txt');
       if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
       
       const proc = spawn(binary, args);
       let jsonStr = '';
       proc.stdout.on('data', (d) => jsonStr += d.toString());
-      
-      await new Promise((resolve) => proc.on('close', resolve));
+      await new Promise((res) => proc.on('close', res));
       
       const info = JSON.parse(jsonStr);
       update.width = info.width;
       update.height = info.height;
       update.mime_type = info.ext ? `media/${info.ext}` : null;
-      
-      console.log(`[Downloader] Metadata for job ${job.id}: ${info.width}x${info.height}, ext: ${info.ext}, size: ${stats.size} bytes`);
     } catch (e) {
-      console.warn(`[Downloader] Could not extract detailed metadata: ${e.message}`);
+      console.warn(`[Downloader] Metadata extraction failed: ${e.message}`);
     }
 
     this.db.updateJob(job.id, update);
