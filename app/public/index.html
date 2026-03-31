@@ -36,16 +36,20 @@
             <section id="dashboard-page" class="page">
                 <div class="card submit-card">
                     <h2>Submit Media URL</h2>
-                    <div class="form-group">
-                        <div class="form-row">
-                            <label class="checkbox-container">
-                                <input type="checkbox" id="is-audio">
-                                <span class="checkmark"></span>
-                                Audio only
-                            </label>
-                            <button id="submit-url-btn" class="primary-btn">Download</button>
-                        </div>
+                <div class="form-group">
+                    <div class="input-stack">
+                        <input type="text" id="media-url" placeholder="Enter media URL (http/https)">
+                        <input type="text" id="custom-filename" placeholder="Custom filename (optional)">
                     </div>
+                </div>
+                <div class="form-row">
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="is-audio">
+                        <span class="checkmark"></span>
+                        Audio only
+                    </label>
+                    <button id="submit-url-btn" class="primary-btn">Download</button>
+                </div>
                 </div>
 
                 <div class="jobs-container">
