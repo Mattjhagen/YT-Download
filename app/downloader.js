@@ -138,15 +138,30 @@ class Downloader {
           '--get-title', 
           '--skip-download', 
           '--js-runtime', 'node',
-          '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv',
+          '--extractor-args', 'youtube:player-client=web_embedded,tv',
           '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         ];
+        if (fs.existsSync(cookiesPath)) {
+            args.push('--cookies', cookiesPath);
+        }
+        args.push(url);
         
         const proc = spawn('/usr/local/bin/yt-dlp', args);
         let title = '';
         proc.stdout.on('data', (data) => title += data.toString());
-        proc.on('close', () => resolve(title.trim() || path.basename(parsed.pathname)));
-        proc.on('error', () => resolve(path.basename(parsed.pathname)));
+        proc.on('close', () => {
+            let finalTitle = title.trim();
+            if (!finalTitle) {
+                // Fallback to video ID if title fails
+                const videoId = url.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/);
+                finalTitle = videoId ? `youtube_${videoId[1]}` : path.basename(parsed.pathname);
+            }
+            resolve(finalTitle);
+        });
+        proc.on('error', () => {
+            const videoId = url.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/);
+            resolve(videoId ? `youtube_${videoId[1]}` : path.basename(parsed.pathname));
+        });
       });
     }
 
