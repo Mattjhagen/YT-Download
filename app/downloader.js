@@ -150,6 +150,7 @@ class Downloader {
           '--get-title', 
           '--skip-download', 
           '--no-warnings',
+          '--js-runtime', 'node',
           '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv,web',
           '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           '--add-header', 'Accept-Language:en-US,en;q=0.9',
@@ -267,6 +268,7 @@ class Downloader {
       '--newline',
       '--progress',
       '--progress-template', '{"percent":"%(progress._percent_str)s"}',
+      '--js-runtime', 'node',
       '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv,web,ios',
       '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       '--add-header', 'Accept-Language:en-US,en;q=0.9',
@@ -419,7 +421,7 @@ class Downloader {
       const binary = this.getToolPath('yt-dlp');
       const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
       const cookiesPath = path.join(storageRoot, 'cookies.txt');
-      const args = ['--print-json', '--skip-download', job.url];
+      const args = ['--print-json', '--skip-download', '--js-runtime', 'node', job.url];
       if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
       
       const proc = spawn(binary, args);
