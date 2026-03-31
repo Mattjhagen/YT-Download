@@ -134,11 +134,13 @@ class Downloader {
     if (isYouTube && await this.checkYtDlp()) {
       return new Promise((resolve) => {
         const cookiesPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop', 'cookies.txt');
-        const args = ['--get-title', '--skip-download', '--js-runtimes', 'node'];
-        if (fs.existsSync(cookiesPath)) {
-            args.push('--cookies', cookiesPath);
-        }
-        args.push(url);
+        const args = [
+          '--get-title', 
+          '--skip-download', 
+          '--js-runtime', 'node',
+          '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv',
+          '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ];
         
         const proc = spawn('/usr/local/bin/yt-dlp', args);
         let title = '';
@@ -239,7 +241,9 @@ class Downloader {
       '--newline',
       '--progress',
       '--progress-template', '{"percent":"%(progress._percent_str)s"}',
-      '--js-runtimes', 'node'
+      '--js-runtime', 'node',
+      '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv',
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     ];
 
     if (fs.existsSync(cookiesPath)) {
