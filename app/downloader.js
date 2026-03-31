@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
-const { dns } = require('dns').promises;
 const URL = require('url').URL;
 
 const PRIVATE_IP_RANGES = [
@@ -19,8 +18,8 @@ const PRIVATE_IP_RANGES = [
   /^fe80:/i
 ];
 
-const MAX_CONCURRENT_JOBS = parseInt(process.env.MEDIA_DROP_MAX_CONCURRENT_JOBS || '3', 10);
-const MAX_FILE_SIZE_BYTES = parseInt(process.env.MEDIA_DROP_MAX_FILE_SIZE_GB || '2', 10) * 1024 * 1024 * 1024;
+const MAX_CONCURRENT_JOBS = parseInt(process.env.MEDIA_DROP_MAX_CONCURRENT || '3', 10);
+const MAX_FILE_SIZE_BYTES = parseInt(process.env.MEDIA_DROP_MAX_FILE_SIZE_BYTES || String(2 * 1024 * 1024 * 1024), 10);
 
 function sanitizeFilename(name) {
   return name.replace(/[^a-zA-Z0-9\._-]/g, '_').substring(0, 255);
@@ -262,7 +261,8 @@ class Downloader {
   }
 
   async downloadYtDlp(job) {
-    const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
+    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const finalDir = path.join(storageRoot, 'library');
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
     const binary = this.getToolPath('yt-dlp');
@@ -313,17 +313,21 @@ class Downloader {
         }
       });
 
-      child.stderr.on('data', (data) => {
-        console.error(`[yt-dlp] [stderr] job ${job.id}: ${data.toString()}`);
+      // Capture stderr for error reporting and logging
+      let stderrData = ‘’;
+      child.stderr.on(‘data’, (data) => {
+        const text = data.toString();
+        stderrData += text;
+        console.error(`[yt-dlp] [stderr] job ${job.id}: ${text}`);
       });
 
-      child.on('error', (err) => {
+      child.on(‘error’, (err) => {
         console.error(`[yt-dlp] Failed to start process for job ${job.id}:`, err);
         this.activeDownloads.delete(job.id);
         reject(err);
       });
 
-      child.on('close', async (code) => {
+      child.on(‘close’, async (code) => {
         this.activeDownloads.delete(job.id);
         console.log(`[yt-dlp] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
@@ -335,25 +339,21 @@ class Downloader {
           resolve();
         } else {
           let errorMsg = `yt-dlp exited with code ${code}`;
-          if (child.stderr_data && child.stderr_data.includes('Sign in to confirm you’re not a bot')) {
-              errorMsg = 'YouTube Bot Check: Please upload cookies.txt (see README)';
+          if (stderrData.includes(‘Sign in to confirm’) || stderrData.includes(‘not a bot’)) {
+            errorMsg = ‘YouTube Bot Check: Please upload cookies.txt (see README)’;
+          } else if (stderrData.includes(‘Video unavailable’)) {
+            errorMsg = ‘Video unavailable or private’;
           }
           reject(new Error(errorMsg));
         }
-      });
-
-      // Capture stderr for better error reporting
-      child.stderr_data = '';
-      child.stderr.on('data', (data) => {
-          child.stderr_data += data.toString();
-          console.error(`[yt-dlp] [stderr] job ${job.id}: ${data.toString()}`);
       });
     });
   }
 
   async downloadAria2(job) {
-    const tmpDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp');
-    const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
+    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const tmpDir = path.join(storageRoot, 'tmp');
+    const finalDir = path.join(storageRoot, 'library');
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
@@ -411,16 +411,26 @@ class Downloader {
   }
 
   async downloadNative(job) {
-    const tmpDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp');
+    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const tmpDir = path.join(storageRoot, 'tmp');
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    
+
     const tempPath = path.join(tmpDir, job.safe_filename);
     const file = fs.createWriteStream(tempPath);
     const protocol = job.url.startsWith('https') ? https : http;
 
     return new Promise((resolve, reject) => {
-      protocol.get(job.url, (response) => {
+      const req = protocol.get(job.url, (response) => {
+        if (response.statusCode === 301 || response.statusCode === 302) {
+          file.close();
+          fs.unlink(tempPath, () => {});
+          job = { ...job, url: response.headers.location };
+          this.downloadNative(job).then(resolve).catch(reject);
+          return;
+        }
         if (response.statusCode !== 200) {
+          file.close();
+          fs.unlink(tempPath, () => {});
           reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
           return;
         }
@@ -434,7 +444,7 @@ class Downloader {
           downloadedBytes += chunk.length;
           if (totalBytes > 0) {
             const progress = (downloadedBytes / totalBytes) * 100;
-            this.db.updateJob(job.id, { 
+            this.db.updateJob(job.id, {
               progress_percent: progress.toFixed(1),
               downloaded_bytes: downloadedBytes,
               total_bytes: totalBytes
@@ -444,11 +454,11 @@ class Downloader {
 
         file.on('finish', () => {
           file.close();
-          const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
+          const finalDir = path.join(storageRoot, 'library');
           if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
           const finalPath = path.join(finalDir, job.safe_filename);
           fs.renameSync(tempPath, finalPath);
-          
+
           const stats = fs.statSync(finalPath);
           this.db.updateJob(job.id, {
             file_size: stats.size,
@@ -461,7 +471,15 @@ class Downloader {
         file.on('error', (err) => {
           fs.unlink(tempPath, () => reject(err));
         });
-      }).on('error', (err) => {
+      });
+
+      req.setTimeout(30000, () => {
+        req.destroy();
+        fs.unlink(tempPath, () => {});
+        reject(new Error('Download connection timed out after 30 seconds'));
+      });
+
+      req.on('error', (err) => {
         fs.unlink(tempPath, () => reject(err));
       });
     });
