@@ -295,6 +295,27 @@ class Downloader {
     return new Promise((resolve, reject) => {
       let stderrData = '';
 
+      // CRITICAL: Must consume stdout — yt-dlp writes progress JSON here.
+      // Without this listener the pipe buffer fills (64KB) and yt-dlp blocks forever.
+      child.stdout.on('data', (data) => {
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed.percent !== undefined) {
+              const pct = parseFloat(String(parsed.percent).replace('%', ''));
+              if (!isNaN(pct)) {
+                this.db.updateJob(job.id, { progress_percent: pct });
+              }
+            }
+          } catch (e) {
+            // Non-JSON line from yt-dlp, ignore
+          }
+        }
+      });
+
       // Capture stderr for error reporting and logging
       child.stderr.on('data', (data) => {
         const msg = data.toString();
@@ -310,9 +331,25 @@ class Downloader {
       child.on('close', async (code) => {
         this.activeDownloads.delete(job.id);
         if (code === 0) {
-          const finalPath = path.join(finalDir, job.safe_filename);
+          // yt-dlp appends the real extension (e.g. .mp4) to the output path.
+          // Search for the actual file if the bare name doesn't exist.
+          let finalPath = path.join(finalDir, job.safe_filename);
+          if (!fs.existsSync(finalPath)) {
+            try {
+              const files = fs.readdirSync(finalDir).filter(f =>
+                path.basename(f, path.extname(f)) === job.safe_filename
+              );
+              if (files.length > 0) {
+                finalPath = path.join(finalDir, files[0]);
+              }
+            } catch (e) {
+              console.warn(`[Downloader] Could not scan library dir: ${e.message}`);
+            }
+          }
           if (fs.existsSync(finalPath)) {
             await this.updateMetadataAfterDownload(job, finalPath);
+          } else {
+            console.warn(`[Downloader] Could not find downloaded file at ${finalPath}`);
           }
           resolve();
         } else {
@@ -455,10 +492,16 @@ class Downloader {
 
   async updateMetadataAfterDownload(job, finalPath) {
     const stats = fs.statSync(finalPath);
+    // Use the actual filename yt-dlp wrote (may differ from safe_filename by extension)
+    const actualFilename = path.basename(finalPath);
+    const actualRelativePath = job.relative_path
+      ? path.join(path.dirname(job.relative_path), actualFilename)
+      : actualFilename;
     const update = {
       file_size: stats.size,
       absolute_path: finalPath,
-      relative_path: job.relative_path || job.safe_filename,
+      safe_filename: actualFilename,
+      relative_path: actualRelativePath,
       updated_at: new Date().toISOString()
     };
 
