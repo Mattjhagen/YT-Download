@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -18,6 +19,19 @@ const downloader = new Downloader(db);
 // Middleware
 app.use(express.json());
 app.use(cookieParser());
+app.set('trust proxy', 1); // For Cloudflare/proxies to get real IP
+
+const limiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // limit each IP to 5 requests per windowMs
+  message: { error: 'Too many download requests from this IP, please try again after an hour' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    return req.headers['cf-connecting-ip'] || req.ip;
+  }
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Authentication middleware
@@ -59,13 +73,18 @@ app.get('/api/downloads', auth, (req, res) => {
   res.json(jobs);
 });
 
-app.post('/api/downloads', auth, async (req, res) => {
+app.post('/api/downloads', auth, limiter, async (req, res) => {
   const { url, filename, subfolder } = req.body;
+  const ip = req.headers['cf-connecting-ip'] || req.ip;
+  const userAgent = req.headers['user-agent'];
   
   try {
     const parsedUrl = await downloader.validateURL(url);
     const domain = parsedUrl.hostname;
     
+    // Log intent
+    db.logAction('DOWNLOAD_SUBMIT', { url, ip, user_agent: userAgent, status: 'pending' });
+
     // Fetch metadata if no filename provided
     let finalTitle = filename;
     if (!finalTitle) {
@@ -101,8 +120,18 @@ app.post('/api/downloads', auth, async (req, res) => {
 
     res.json(job);
   } catch (error) {
+    db.logAction('DOWNLOAD_ERROR', { url, ip, user_agent: userAgent, status: 'error', details: { message: error.message } });
     res.status(400).json({ error: error.message });
   }
+});
+
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        storage: process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop'
+    });
 });
 
 app.post('/api/downloads/:id/retry', auth, (req, res) => {
@@ -196,8 +225,14 @@ app.get('/api/files', auth, (req, res) => {
   res.json(files);
 });
 
-app.listen(port, () => {
-  console.log(`Media Drop server running at http://localhost:${port}`);
+app.listen(port, '127.0.0.1', () => {
+  console.log('---------------------------------------------------------');
+  console.log(`🚀 Media Drop server starting...`);
+  console.log(`📍 Local Address: http://127.0.0.1:${port}`);
+  console.log(`📂 Storage Root:  ${process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop'}`);
+  console.log(`🛡️  Admin Auth:    ENABLED`);
+  console.log(`🔥 Rate Limiting:  ENABLED (5/hr)`);
+  console.log('---------------------------------------------------------');
   
   // Log tool versions for debugging
   const { execSync } = require('child_process');
@@ -214,7 +249,7 @@ app.listen(port, () => {
   // Resume interrupted downloads on startup
   const interruptedJobs = db.getAllJobs().filter(j => j.status === 'downloading' || j.status === 'queued');
   if (interruptedJobs.length > 0) {
-    console.log(`🚀 Resuming ${interruptedJobs.length} interrupted jobs...`);
+    console.log(`[Startup] Resuming ${interruptedJobs.length} interrupted/queued jobs...`);
     interruptedJobs.forEach(job => {
       downloader.startDownload(job.id);
     });

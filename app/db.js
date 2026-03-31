@@ -52,6 +52,20 @@ class DBManager {
         UPDATE jobs SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
       END
     `);
+
+    // Create audit_logs table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        action TEXT NOT NULL,
+        url TEXT,
+        ip TEXT,
+        user_agent TEXT,
+        status TEXT,
+        details TEXT
+      )
+    `);
   }
 
   createJob(jobData) {
@@ -102,8 +116,26 @@ class DBManager {
         console.error(`Failed to delete file for job ${id}:`, e);
       }
     }
-    this.db.prepare('SELECT * FROM jobs WHERE id = ?').get(id); // Extra check not needed
     return this.db.prepare('DELETE FROM jobs WHERE id = ?').run(id);
+  }
+
+  logAction(action, data = {}) {
+    const stmt = this.db.prepare(`
+      INSERT INTO audit_logs (action, url, ip, user_agent, status, details)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      action,
+      data.url || null,
+      data.ip || null,
+      data.user_agent || null,
+      data.status || 'success',
+      data.details ? JSON.stringify(data.details) : null
+    );
+  }
+
+  getAuditLogs(limit = 100) {
+    return this.db.prepare('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT ?').all(limit);
   }
 }
 

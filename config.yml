@@ -1,0 +1,10 @@
+tunnel: media-drop-tunnel
+credentials-file: /root/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  # Route traffic for media.finchwire.site to local app
+  - hostname: media.finchwire.site
+    service: http://127.0.0.1:8080
+  
+  # Catch-all for other traffic (returns 404)
+  - service: http_status:404

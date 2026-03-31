@@ -13,9 +13,14 @@ const PRIVATE_IP_RANGES = [
   /^192\.168\./,
   /^169\.254\./,
   /^::1$/,
+  /^0\.0\.0\.0$/,
+  /^::$/,
   /^fc00:/i,
   /^fe80:/i
 ];
+
+const MAX_CONCURRENT_JOBS = parseInt(process.env.MEDIA_DROP_MAX_CONCURRENT_JOBS || '3', 10);
+const MAX_FILE_SIZE_BYTES = parseInt(process.env.MEDIA_DROP_MAX_FILE_SIZE_GB || '2', 10) * 1024 * 1024 * 1024;
 
 function sanitizeFilename(name) {
   return name.replace(/[^a-zA-Z0-9\._-]/g, '_').substring(0, 255);
@@ -36,9 +41,22 @@ class Downloader {
     const allowPrivate = process.env.MEDIA_DROP_ALLOW_PRIVATE_HOSTS === 'true';
     if (!allowPrivate) {
         try {
-            const addresses = await require('dns').promises.resolve4(parsed.hostname).catch(() => []);
-            const addresses6 = await require('dns').promises.resolve6(parsed.hostname).catch(() => []);
-            const allIPs = [...addresses, ...addresses6];
+            let allIPs = [];
+            // If hostname is already an IP, add it. Otherwise resolve it.
+            const isIP = /^[\d\.]+$|:/.test(parsed.hostname);
+            if (isIP) {
+                allIPs.push(parsed.hostname);
+            } else {
+                const addresses = await require('dns').promises.resolve4(parsed.hostname).catch(() => []);
+                const addresses6 = await require('dns').promises.resolve6(parsed.hostname).catch(() => []);
+                allIPs = [...addresses, ...addresses6];
+                
+                // fallback to lookup for localhost/etc-hosts
+                if (allIPs.length === 0) {
+                    const lookup = await require('dns').promises.lookup(parsed.hostname).catch(() => null);
+                    if (lookup) allIPs.push(lookup.address);
+                }
+            }
 
             for (const ip of allIPs) {
                 if (PRIVATE_IP_RANGES.some(range => range.test(ip))) {
@@ -46,7 +64,7 @@ class Downloader {
                 }
             }
         } catch (e) {
-            // If DNS fails, we lean on the side of caution or just let the download fail later
+            if (e.message.includes('blocked')) throw e;
             console.warn(`DNS validation failed for ${parsed.hostname}: ${e.message}`);
         }
     }
@@ -57,7 +75,39 @@ class Downloader {
       throw new Error(`Domain ${parsed.hostname} is not in the allowlist.`);
     }
 
+    // Check file size via HEAD request if not a video platform
+    const isVideoPlatform = parsed.hostname.includes('youtube.com') || 
+                            parsed.hostname.includes('youtu.be') || 
+                            parsed.hostname.includes('vimeo.com');
+
+    if (!isVideoPlatform) {
+      try {
+        const size = await this.getFileSize(urlStr);
+        if (size > MAX_FILE_SIZE_BYTES) {
+          throw new Error(`File size (${(size / 1024 / 1024 / 1024).toFixed(2)} GB) exceeds the limit of ${process.env.MEDIA_DROP_MAX_FILE_SIZE_GB || '2'} GB.`);
+        }
+      } catch (err) {
+        console.warn(`Could not verify file size for ${urlStr}: ${err.message}`);
+      }
+    }
+
     return parsed;
+  }
+
+  async getFileSize(url) {
+    return new Promise((resolve, reject) => {
+      const protocol = url.startsWith('https') ? https : http;
+      const req = protocol.request(url, { method: 'HEAD', timeout: 5000 }, (res) => {
+        const size = parseInt(res.headers['content-length'], 10);
+        resolve(isNaN(size) ? 0 : size);
+      });
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Timeout checking file size'));
+      });
+      req.end();
+    });
   }
 
   async checkYtDlp() {
@@ -112,6 +162,13 @@ class Downloader {
   }
 
   async startDownload(jobId) {
+    const activeCount = Array.from(this.activeDownloads.keys()).length;
+    if (activeCount >= MAX_CONCURRENT_JOBS) {
+      console.log(`[Downloader] Queueing job ${jobId} (Active: ${activeCount}/${MAX_CONCURRENT_JOBS})`);
+      this.db.updateJob(jobId, { status: 'queued' });
+      return;
+    }
+
     const job = this.db.getJob(jobId);
     if (!job) return;
 
@@ -142,6 +199,22 @@ class Downloader {
         error_message: error.message, 
         updated_at: new Date().toISOString() 
       });
+    } finally {
+      // Check for next job in queue
+      this.processQueue();
+    }
+  }
+
+  processQueue() {
+    const queuedJobs = this.db.getAllJobs().filter(j => j.status === 'queued');
+    if (queuedJobs.length > 0 && this.activeDownloads.size < MAX_CONCURRENT_JOBS) {
+        const nextJob = queuedJobs[queuedJobs.length - 1]; // Oldest first (ASC order usually, but getAllJobs is DESC)
+        // Correcting: find the oldest queued job
+        const oldestQueued = queuedJobs.sort((a,b) => new Date(a.created_at) - new Date(b.created_at))[0];
+        if (oldestQueued) {
+            console.log(`[Downloader] Picking up queued job: ${oldestQueued.id}`);
+            this.startDownload(oldestQueued.id);
+        }
     }
   }
 
@@ -268,7 +341,10 @@ class Downloader {
   }
 
   async downloadNative(job) {
-    const tempPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp', job.safe_filename);
+    const tmpDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'tmp');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    
+    const tempPath = path.join(tmpDir, job.safe_filename);
     const file = fs.createWriteStream(tempPath);
     const protocol = job.url.startsWith('https') ? https : http;
 
