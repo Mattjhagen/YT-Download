@@ -21,27 +21,28 @@ app.use(express.json());
 app.use(cookieParser());
 app.set('trust proxy', 1); // For Cloudflare/proxies to get real IP
 
+// Trust Cloudflare proxy headers
+app.set('trust proxy', 1);
+
 const limiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5, // Limit each IP to 5 requests per hour
-  standardHeaders: true,
+  limit: 5, // Limit each IP to 5 requests per hour
+  standardHeaders: 'draft-7',
   legacyHeaders: false,
-  keyGenerator: (req) => {
-    return req.headers['cf-connecting-ip'] || req.ip;
-  },
-  validate: { xForwardedForHeader: false } // Disable this specific validation as we handle CF headers manually
+  // Use default key generator which works correctly when trust proxy is enabled
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+app.use(limiter);
 
-// Authentication middleware
+// Auth middleware
 const auth = (req, res, next) => {
-  const sessionToken = req.cookies.session;
-  if (sessionToken === adminPassword) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Unauthorized' });
+  const password = req.headers['x-admin-password'];
+  if (process.env.MEDIA_DROP_ADMIN_PASSWORD && password === process.env.MEDIA_DROP_ADMIN_PASSWORD) {
+    return next();
   }
+  res.status(401).json({ error: 'Unauthorized' });
 };
 
 // SSE Clients
