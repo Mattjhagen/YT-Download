@@ -36,9 +36,9 @@ class DBManager {
         mime_type TEXT,
         file_size INTEGER DEFAULT 0,
         source_domain TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        completed_at DATETIME,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        completed_at TEXT,
         error_message TEXT
       )
     `);
@@ -49,7 +49,7 @@ class DBManager {
       AFTER UPDATE ON jobs
       FOR EACH ROW
       BEGIN
-        UPDATE jobs SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+        UPDATE jobs SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = OLD.id;
       END
     `);
 
@@ -57,7 +57,7 @@ class DBManager {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        timestamp TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         action TEXT NOT NULL,
         url TEXT,
         ip TEXT,
@@ -120,9 +120,16 @@ class DBManager {
   }
 
   logAction(action, data = {}) {
+    const cookiePath = process.env.COOKIES_PATH || '/srv/media-drop/cookies.txt';
+    if (fs.existsSync(cookiePath)) {
+      console.log(`Accessing cookie file at: ${cookiePath}`);
+    } else {
+      console.warn(`Cookie file not found at: ${cookiePath}`);
+    }
+
     const stmt = this.db.prepare(`
-      INSERT INTO audit_logs (action, url, ip, user_agent, status, details)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO audit_logs (action, url, ip, user_agent, status, details, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       action,
@@ -130,7 +137,8 @@ class DBManager {
       data.ip || null,
       data.user_agent || null,
       data.status || 'success',
-      data.details ? JSON.stringify(data.details) : null
+      data.details ? JSON.stringify(data.details) : null,
+      new Date().toISOString()
     );
   }
 
