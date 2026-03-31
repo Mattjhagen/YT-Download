@@ -23,23 +23,24 @@ app.set('trust proxy', 1); // For Cloudflare/proxies to get real IP
 
 // Trust Cloudflare proxy headers
 app.set('trust proxy', 1);
-
 const limiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  limit: 5, // Limit each IP to 5 requests per hour
+  limit: 100, // Allow 100 requests per hour
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  // Use default key generator which works correctly when trust proxy is enabled
+  validate: { xForwardedForHeader: false },
+  message: { error: 'Too many requests, please try again later.' }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
+app.use(cookieParser());
 app.use(limiter);
 
 // Auth middleware
 const auth = (req, res, next) => {
-  const password = req.headers['x-admin-password'];
-  if (process.env.MEDIA_DROP_ADMIN_PASSWORD && password === process.env.MEDIA_DROP_ADMIN_PASSWORD) {
+  const sessionToken = req.cookies.session;
+  if (process.env.MEDIA_DROP_ADMIN_PASSWORD && sessionToken === process.env.MEDIA_DROP_ADMIN_PASSWORD) {
     return next();
   }
   res.status(401).json({ error: 'Unauthorized' });
@@ -51,8 +52,8 @@ let sseClients = [];
 // API Routes
 app.post('/api/login', (req, res) => {
   const { password } = req.body;
-  if (password === adminPassword) {
-    res.cookie('session', adminPassword, { httpOnly: true, maxAge: 86400000 });
+  if (process.env.MEDIA_DROP_ADMIN_PASSWORD && password === process.env.MEDIA_DROP_ADMIN_PASSWORD) {
+    res.cookie('session', password, { httpOnly: true, secure: true, sameSite: 'strict' });
     res.json({ success: true });
   } else {
     res.status(401).json({ error: 'Invalid password' });
@@ -66,7 +67,7 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/session', (req, res) => {
   const sessionToken = req.cookies.session;
-  res.json({ authenticated: sessionToken === adminPassword });
+  res.json({ authenticated: process.env.MEDIA_DROP_ADMIN_PASSWORD && sessionToken === process.env.MEDIA_DROP_ADMIN_PASSWORD });
 });
 
 app.get('/api/downloads', auth, (req, res) => {
