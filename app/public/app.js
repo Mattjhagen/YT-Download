@@ -138,8 +138,11 @@ const App = {
                     <div class="job-percent">${Math.round(job.progress_percent || 0)}%</div>
                 ` : ''}
                 <div class="status-badge status-${job.status}">${job.status}</div>
-                ${job.status === 'failed' ? `<button onclick="App.retryJob('${job.id}')" class="primary-btn sm-btn">Retry</button>` : ''}
-                <button onclick="App.deleteJob('${job.id}')" class="text-btn">Delete</button>
+                <div class="job-actions">
+                    ${job.status === 'completed' ? `<button onclick="App.playInVlc('/media/${encodeURIComponent(job.relative_path)}')" class="primary-btn sm-btn vlc-btn">📺 Play</button>` : ''}
+                    ${job.status === 'failed' ? `<button onclick="App.retryJob('${job.id}')" class="primary-btn sm-btn">Retry</button>` : ''}
+                    <button onclick="App.deleteJob('${job.id}')" class="text-btn">Delete</button>
+                </div>
             </div>
         `;
     },
@@ -154,6 +157,14 @@ const App = {
         }
     },
 
+    playInVlc(path) {
+        const protocol = window.location.protocol;
+        const host = window.location.host;
+        const fullUrl = `${protocol}//${host}${path}`;
+        window.location.href = `vlc://${fullUrl}`;
+        this.showToast('Opening in VLC...');
+    },
+
     async loadFiles() {
         const res = await fetch('/api/files');
         const files = await res.json();
@@ -164,6 +175,7 @@ const App = {
                     <div class="job-meta">${(f.size / 1024 / 1024).toFixed(2)} MB | ${new Date(f.mtime).toLocaleString()}</div>
                 </div>
                 <div class="file-actions">
+                    <button onclick="App.playInVlc('${f.url}')" class="icon-btn vlc-icon" title="Play in VLC">📺</button>
                     <button onclick="App.copyToClipboard('${window.location.origin}${f.url}')" class="icon-btn" title="Copy Streaming URL">🔗</button>
                     <button onclick="App.copyToClipboard('${f.path}')" class="icon-btn" title="Copy Path">📂</button>
                     <button onclick="App.deleteFile('${f.name}')" class="icon-btn" title="Delete">🗑️</button>
