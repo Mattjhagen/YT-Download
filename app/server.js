@@ -7,6 +7,7 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const DBManager = require('./db');
 const { Downloader, sanitizeFilename } = require('./downloader');
+const UrlHelper = require('./utils/url');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -71,12 +72,16 @@ app.get('/api/session', (req, res) => {
 });
 
 app.get('/api/downloads', auth, (req, res) => {
-  const jobs = db.getAllJobs();
+  const jobs = db.getAllJobs().map(job => ({
+    ...job,
+    media_url: UrlHelper.buildMediaUrl(job.relative_path || job.safe_filename),
+    vlc_url: UrlHelper.buildVlcUrl(job.relative_path || job.safe_filename)
+  }));
   res.json(jobs);
 });
 
 app.post('/api/downloads', auth, limiter, async (req, res) => {
-  const { url, filename, subfolder } = req.body;
+  const { url, filename, subfolder, is_audio } = req.body;
   const ip = req.headers['cf-connecting-ip'] || req.ip;
   const userAgent = req.headers['user-agent'];
   
@@ -114,7 +119,8 @@ app.post('/api/downloads', auth, limiter, async (req, res) => {
       safe_filename: safeName,
       relative_path: relativePath,
       absolute_path: absolutePath,
-      source_domain: domain
+      source_domain: domain,
+      is_audio: !!is_audio
     });
 
     // Start download in background
@@ -198,7 +204,44 @@ app.get('/media/:filename', auth, (req, res) => {
   }
 
   if (fs.existsSync(filePath)) {
-    res.sendFile(filePath, { acceptRanges: true });
+    const stats = fs.statSync(filePath);
+    const ext = path.extname(filename).toLowerCase();
+    const contentType = ext === '.m4a' || ext === '.mp3' ? 'audio/mpeg' : 'video/mp4';
+    
+    // View Tracking (debounced)
+    const debounceHours = parseInt(process.env.MEDIA_VIEW_DEBOUNCE_HOURS, 10) || 6;
+    const job = db.getJobByFilename(filename);
+    if (job) {
+        db.updateView(job.id, debounceHours);
+    }
+
+    const range = req.headers.range;
+    const download = req.query.download === 'true';
+
+    if (range && !download) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+      const chunksize = (end - start) + 1;
+      const file = fs.createReadStream(filePath, {start, end});
+      const head = {
+        'Content-Range': `bytes ${start}-${end}/${stats.size}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': contentType,
+      };
+      res.writeHead(206, head);
+      file.pipe(res);
+    } else {
+      const head = {
+        'Content-Length': stats.size,
+        'Content-Type': contentType,
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': download ? `attachment; filename="${encodeURIComponent(filename)}"` : 'inline'
+      };
+      res.writeHead(200, head);
+      fs.createReadStream(filePath).pipe(res);
+    }
   } else {
     res.status(404).send('File not found');
   }
@@ -212,7 +255,9 @@ app.get('/api/files', auth, (req, res) => {
     return res.json([]);
   }
 
-  const files = fs.readdirSync(libraryDir).map(file => {
+  const files = fs.readdirSync(libraryDir)
+    .filter(file => !file.startsWith('.'))
+    .map(file => {
     const filePath = path.join(libraryDir, file);
     const stats = fs.statSync(filePath);
     return {
@@ -220,12 +265,56 @@ app.get('/api/files', auth, (req, res) => {
       size: stats.size,
       mtime: stats.mtime,
       path: filePath,
-      url: `/media/${encodeURIComponent(file)}`
+      url: UrlHelper.buildMediaUrl(file),
+      vlc_url: UrlHelper.buildVlcUrl(file)
     };
   });
   
   res.json(files);
 });
+
+// Periodic Cleanup Job
+async function runCleanup() {
+  if (process.env.MEDIA_RETENTION_ENABLED === 'false') return;
+  
+  const retentionDays = parseInt(process.env.MEDIA_RETENTION_DAYS, 10) || 30;
+  console.log(`[Cleanup] Running daily retention check (Threshold: ${retentionDays} days)...`);
+  
+  const expiredJobs = db.getExpiredJobs(retentionDays);
+  let deletedCount = 0;
+
+  for (const job of expiredJobs) {
+    if (job.absolute_path && fs.existsSync(job.absolute_path)) {
+      try {
+        fs.unlinkSync(job.absolute_path);
+        db.markJobDeleted(job.id);
+        db.logAction('CLEANUP_DELETE', { 
+            url: job.url, 
+            status: 'success', 
+            details: { id: job.id, filename: job.filename, path: job.absolute_path } 
+        });
+        deletedCount++;
+        console.log(`[Cleanup] Deleted expired media: ${job.filename} (ID: ${job.id})`);
+      } catch (err) {
+        console.error(`[Cleanup] Failed to delete file ${job.absolute_path}:`, err);
+      }
+    } else {
+        // Even if file is missing, mark as expired to keep DB clean
+        db.markJobDeleted(job.id);
+    }
+  }
+  
+  if (deletedCount > 0) {
+    console.log(`[Cleanup] Successfully removed ${deletedCount} expired items.`);
+  }
+}
+
+// Run cleanup every 24 hours
+const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000;
+setInterval(runCleanup, CLEANUP_INTERVAL);
+
+// Also run once on startup (after 1 minute to avoid heavy load)
+setTimeout(runCleanup, 60 * 1000);
 
 app.listen(port, '127.0.0.1', () => {
   console.log('---------------------------------------------------------');

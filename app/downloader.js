@@ -110,17 +110,36 @@ class Downloader {
     });
   }
 
+  getToolPath(tool) {
+    const envPath = process.env[`MEDIA_DROP_${tool.toUpperCase().replace(/-/g, '_')}_PATH`];
+    if (envPath && fs.existsSync(envPath)) return envPath;
+
+    const commonPaths = [
+      `/opt/homebrew/bin/${tool}`,
+      `/usr/local/bin/${tool}`,
+      `/usr/bin/${tool}`,
+      tool // fallback to PATH
+    ];
+
+    for (const p of commonPaths) {
+      if (p === tool || fs.existsSync(p)) return p;
+    }
+    return tool;
+  }
+
   async checkYtDlp() {
+    const binary = this.getToolPath('yt-dlp');
     return new Promise((resolve) => {
-      const proc = spawn('/usr/local/bin/yt-dlp', ['--version']);
+      const proc = spawn(binary, ['--version']);
       proc.on('error', () => resolve(false));
       proc.on('close', (code) => resolve(code === 0));
     });
   }
 
   async checkAria2() {
+    const binary = this.getToolPath('aria2c');
     return new Promise((resolve) => {
-      const proc = spawn('/usr/bin/aria2c', ['--version']);
+      const proc = spawn(binary, ['--version']);
       proc.on('error', () => resolve(false));
       proc.on('close', (code) => resolve(code === 0));
     });
@@ -146,7 +165,7 @@ class Downloader {
         }
         args.push(url);
         
-        const proc = spawn('/usr/local/bin/yt-dlp', args);
+        const proc = spawn(this.getToolPath('yt-dlp'), args);
         let title = '';
         proc.stdout.on('data', (data) => title += data.toString());
         proc.on('close', () => {
@@ -246,20 +265,32 @@ class Downloader {
     const finalDir = path.join(process.env.MEDIA_DROP_STORAGE_ROOT, 'library');
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
-    const binary = '/usr/local/bin/yt-dlp';
+    const binary = this.getToolPath('yt-dlp');
+    const ffmpegPath = this.getToolPath('ffmpeg');
     const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
     const cookiesPath = path.join(storageRoot, 'cookies.txt');
     
+    // Quality Strategy: bv*+ba/b for video, ba/b for audio-only
+    const formatStr = job.is_audio ? 'ba/b' : 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b';
+    
     const args = [
       '--output', path.join(finalDir, job.safe_filename),
+      '--format', formatStr,
       '--no-playlist',
       '--newline',
       '--progress',
       '--progress-template', '{"percent":"%(progress._percent_str)s"}',
       '--js-runtime', 'node',
       '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv',
-      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      '--ffmpeg-location', ffmpegPath
     ];
+
+    if (job.is_audio) {
+      args.push('--extract-audio', '--audio-format', 'm4a', '--audio-quality', '0');
+    } else {
+      args.push('--merge-output-format', 'mp4');
+    }
 
     if (fs.existsSync(cookiesPath)) {
         console.log(`[yt-dlp] Using cookies from ${cookiesPath}`);
@@ -292,18 +323,14 @@ class Downloader {
         reject(err);
       });
 
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
         this.activeDownloads.delete(job.id);
         console.log(`[yt-dlp] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
           const finalPath = path.join(finalDir, job.safe_filename);
           if (fs.existsSync(finalPath)) {
-            const stats = fs.statSync(finalPath);
-            this.db.updateJob(job.id, {
-                file_size: stats.size,
-                absolute_path: finalPath,
-                relative_path: job.safe_filename
-            });
+            // Extract precise metadata after download
+            await this.updateMetadataAfterDownload(job, finalPath);
           }
           resolve();
         } else {
@@ -330,7 +357,7 @@ class Downloader {
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
-    const binary = '/usr/bin/aria2c';
+    const binary = this.getToolPath('aria2c');
     const args = [
       '--dir', tmpDir,
       '--out', job.safe_filename,
@@ -364,7 +391,7 @@ class Downloader {
         reject(err);
       });
 
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
         this.activeDownloads.delete(job.id);
         console.log(`[aria2c] Process exited with code ${code} for job ${job.id}`);
         if (code === 0) {
@@ -372,12 +399,8 @@ class Downloader {
           const finalPath = path.join(finalDir, job.safe_filename);
           if (fs.existsSync(tmpPath)) {
             fs.renameSync(tmpPath, finalPath);
-            const stats = fs.statSync(finalPath);
-            this.db.updateJob(job.id, {
-              file_size: stats.size,
-              absolute_path: finalPath,
-              relative_path: job.safe_filename
-            });
+            // Extract precise metadata after download
+            await this.updateMetadataAfterDownload(job, finalPath);
           }
           resolve();
         } else {
@@ -451,6 +474,41 @@ class Downloader {
       this.activeDownloads.delete(jobId);
       this.db.updateJob(jobId, { status: 'cancelled' });
     }
+  }
+
+  async updateMetadataAfterDownload(job, finalPath) {
+    const stats = fs.statSync(finalPath);
+    const update = {
+      file_size: stats.size,
+      absolute_path: finalPath,
+      relative_path: job.relative_path || job.safe_filename,
+      updated_at: new Date().toISOString()
+    };
+
+    // Try to get resolution and codecs using ffprobe or yt-dlp
+    try {
+      const binary = this.getToolPath('yt-dlp');
+      const args = ['--print-json', '--skip-download', job.url];
+      const cookiesPath = path.join(process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop', 'cookies.txt');
+      if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
+      
+      const proc = spawn(binary, args);
+      let jsonStr = '';
+      proc.stdout.on('data', (d) => jsonStr += d.toString());
+      
+      await new Promise((resolve) => proc.on('close', resolve));
+      
+      const info = JSON.parse(jsonStr);
+      update.width = info.width;
+      update.height = info.height;
+      update.mime_type = info.ext ? `media/${info.ext}` : null;
+      
+      console.log(`[Downloader] Metadata for job ${job.id}: ${info.width}x${info.height}, ext: ${info.ext}, size: ${stats.size} bytes`);
+    } catch (e) {
+      console.warn(`[Downloader] Could not extract detailed metadata: ${e.message}`);
+    }
+
+    this.db.updateJob(job.id, update);
   }
 }
 
