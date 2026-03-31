@@ -40,7 +40,7 @@ app.use(limiter);
 
 // Auth middleware
 const auth = (req, res, next) => {
-  const sessionToken = req.cookies.session;
+  const sessionToken = req.cookies.session || req.headers['x-finchwire-token'];
   if (process.env.MEDIA_DROP_ADMIN_PASSWORD && sessionToken === process.env.MEDIA_DROP_ADMIN_PASSWORD) {
     return next();
   }

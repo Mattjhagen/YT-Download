@@ -17,10 +17,58 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             break;
             
+        case 'REMOTE_DOWNLOAD':
+            handleRemoteDownload(message.url, message.filename, sendResponse);
+            return true; // Keep message channel open for async response
+            
         case 'COPY_URL':
-            // Clipboard API is tricky in service workers, but logic can be handled in content script 
-            // or use a temporary offscreen document for MV3 if needed. 
-            // For now, content.js can just handle copy to clipboard directly.
+            // Handled in content script
             break;
     }
 });
+
+async function handleRemoteDownload(videoUrl, title, sendResponse) {
+    try {
+        const { serverUrl, serverPassword } = await chrome.storage.sync.get(['serverUrl', 'serverPassword']);
+        
+        if (!serverUrl || !serverPassword) {
+            console.error('FinchWire: Server URL or Password not set in options.');
+            sendResponse({ success: false, error: 'Configuration missing' });
+            return;
+        }
+
+        const response = await fetch(`${serverUrl}/api/downloads`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-FinchWire-Token': serverPassword
+            },
+            body: JSON.stringify({
+                url: videoUrl,
+                filename: title
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            console.log('FinchWire: Remote download started successfully:', data);
+            
+            chrome.notifications.create({
+                type: 'basic',
+                iconUrl: 'icon128.png',
+                title: 'FinchWire Download Started',
+                message: `Successfully sent "${title}" to your server.`,
+                priority: 2
+            });
+
+            sendResponse({ success: true, data });
+        } else {
+            const error = await response.json();
+            console.error('FinchWire: Remote download failed:', error);
+            sendResponse({ success: false, error: error.error || 'Server error' });
+        }
+    } catch (err) {
+        console.error('FinchWire: Remote communication error:', err);
+        sendResponse({ success: false, error: err.message });
+    }
+}
