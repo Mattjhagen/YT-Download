@@ -87,6 +87,7 @@ const App = {
         this.appContainer.classList.remove('hidden');
         this.loadDashboard();
         this.startSSE();
+        if (window.lucide) lucide.createIcons();
     },
 
     switchTab(e) {
@@ -136,6 +137,8 @@ const App = {
 
         this.activeJobsList.innerHTML = active.map(j => this.renderJobItem(j)).join('') || '<div class="empty-state">No active downloads</div>';
         this.historyJobsList.innerHTML = history.map(j => this.renderJobItem(j)).join('') || '<div class="empty-state">History is empty</div>';
+        
+        if (window.lucide) lucide.createIcons();
     },
 
     renderJobItem(job) {
@@ -158,12 +161,18 @@ const App = {
                 <div class="status-badge status-${job.status}">${job.status}${job.is_audio ? ' (Audio)' : ''}</div>
                 <div class="job-actions">
                     ${job.status === 'completed' ? `
-                        <button onclick="App.playInVlc('${job.vlc_url}')" class="primary-btn sm-btn vlc-btn" title="Open in VLC">📺 VLC</button>
-                        <button onclick="App.openPlayer('${job.media_url}', ${job.is_audio}, '${job.filename || job.url}', '${job.vlc_url}')" class="primary-btn sm-btn" title="Play in Browser">▶️ Play</button>
-                        <a href="${job.media_url}?download=true" download class="primary-btn sm-btn secondary-btn" style="text-decoration:none; display:inline-flex; align-items:center;">⬇️ Download</a>
+                        <button onclick="App.openPlayer('${job.media_url}', ${job.is_audio}, '${job.filename || job.url}', '${job.vlc_url}')" class="primary-btn sm-btn" title="Play">
+                            <i data-lucide="play"></i> Play
+                        </button>
+                        <button onclick="App.playInVlc('${job.vlc_url}')" class="primary-btn sm-btn vlc-btn" title="Open in VLC">
+                            <i data-lucide="tv"></i> VLC
+                        </button>
+                        <a href="${job.media_url}?download=true" download class="primary-btn sm-btn secondary-btn" style="text-decoration:none; display:inline-flex; align-items:center;">
+                            <i data-lucide="download"></i>
+                        </a>
                     ` : ''}
-                    ${job.status === 'failed' ? `<button onclick="App.retryJob('${job.id}')" class="primary-btn sm-btn">Retry</button>` : ''}
-                    <button onclick="App.deleteJob('${job.id}')" class="text-btn">Delete</button>
+                    ${job.status === 'failed' ? `<button onclick="App.retryJob('${job.id}')" class="primary-btn sm-btn"><i data-lucide="refresh-cw"></i> Retry</button>` : ''}
+                    <button onclick="App.deleteJob('${job.id}')" class="text-btn"><i data-lucide="trash-2"></i></button>
                 </div>
             </div>
         `;
@@ -228,13 +237,23 @@ const App = {
                     <div class="job-meta">${(f.size / 1024 / 1024).toFixed(2)} MB | ${new Date(f.mtime).toLocaleString()}</div>
                 </div>
                 <div class="file-actions">
-                    <button onclick="App.openPlayer('${f.url}', ${f.name.endsWith('.m4a') || f.name.endsWith('.mp3')}, '${f.name}', '${f.vlc_url}')" class="icon-btn" title="Stream in Browser">▶️</button>
-                    <button onclick="App.playInVlc('${f.vlc_url}')" class="icon-btn vlc-icon" title="Play in VLC">📺</button>
-                    <button onclick="App.copyToClipboard('${f.url}')" class="icon-btn" title="Copy Streaming URL">🔗</button>
-                    <button onclick="App.deleteFile('${f.name}')" class="icon-btn" title="Delete">🗑️</button>
+                    <button onclick="App.openPlayer('${f.url}', ${f.name.endsWith('.m4a') || f.name.endsWith('.mp3')}, '${f.name}', '${f.vlc_url}')" class="primary-btn sm-btn" title="Play">
+                        <i data-lucide="play"></i> Play
+                    </button>
+                    <button onclick="App.playInVlc('${f.vlc_url}')" class="primary-btn sm-btn vlc-btn" title="Play in VLC">
+                        <i data-lucide="tv"></i> VLC
+                    </button>
+                    <button onclick="App.copyToClipboard('${f.url}')" class="icon-btn" title="Copy Streaming URL">
+                        <i data-lucide="link"></i>
+                    </button>
+                    <button onclick="App.deleteFile('${f.name}')" class="icon-btn" title="Delete">
+                        <i data-lucide="trash-2"></i>
+                    </button>
                 </div>
             </div>
         `).join('') || '<div class="empty-state">No files found</div>';
+        
+        if (window.lucide) lucide.createIcons();
     },
 
     async deleteJob(id) {

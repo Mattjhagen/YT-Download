@@ -1,14 +1,14 @@
 :root {
-  --primary: #3b82f6;
-  --primary-hover: #2563eb;
-  --bg: #0f172a;
-  --card-bg: #1e293b;
-  --border: #334155;
-  --text: #f8fafc;
-  --text-muted: #94a3b8;
-  --success: #22c55e;
-  --danger: #ef4444;
-  --warning: #f59e0b;
+  --primary: #FF0000;         /* YouTube Red */
+  --primary-hover: #CC0000;
+  --bg: #0F0F0F;              /* YouTube Black */
+  --card-bg: #222222;         /* Surface Grey */
+  --border: #333333;
+  --text: #ffffff;
+  --text-muted: #AAAAAA;
+  --success: #00C853;
+  --danger: #FF0000;
+  --vlc: #F97316;
 }
 
 * {
@@ -39,9 +39,9 @@ body {
 .card {
   background-color: var(--card-bg);
   border: 1px solid var(--border);
-  padding: 2rem;
-  border-radius: 1rem;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  padding: 1.5rem;
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
 .login-card {
@@ -73,10 +73,14 @@ input {
 button {
   cursor: pointer;
   border: none;
-  border-radius: 0.5rem;
-  padding: 0.75rem 1.5rem;
+  border-radius: 1.5rem; /* More rounded like YouTube */
+  padding: 0.6rem 1.25rem;
   font-weight: 600;
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
 .primary-btn {
@@ -102,11 +106,11 @@ button {
 }
 
 .vlc-btn {
-  background-color: #f97316; /* VLC Orange */
+  background-color: var(--vlc); /* VLC Orange */
 }
 
 .vlc-btn:hover {
-  background-color: #ea580c;
+  filter: brightness(1.1);
 }
 
 .vlc-icon {
@@ -134,6 +138,7 @@ nav {
   font-weight: 800;
   font-size: 1.5rem;
   color: var(--primary);
+  letter-spacing: -0.5px;
 }
 
 .nav-links a {
@@ -209,13 +214,16 @@ h2, h3 {
 
 .job-item, .file-item {
   background: var(--card-bg);
-  border: 1px solid var(--border);
-  padding: 1rem;
-  border-radius: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 0.5rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
+}
+
+.job-item:last-child {
+  border-bottom: none;
 }
 
 .job-actions, .file-actions {
@@ -296,12 +304,12 @@ h2, h3 {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(15, 23, 42, 0.95);
+  background: rgba(0, 0, 0, 0.95);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 1000;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
 }
 
 .modal-content {
