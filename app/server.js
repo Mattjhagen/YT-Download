@@ -22,8 +22,6 @@ app.use(express.json());
 app.use(cookieParser());
 app.set('trust proxy', 1); // For Cloudflare/proxies to get real IP
 
-// Trust Cloudflare proxy headers
-app.set('trust proxy', 1);
 const limiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   limit: 100, // Allow 100 requests per hour
@@ -34,14 +32,44 @@ const limiter = rateLimit({
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json());
-app.use(cookieParser());
 app.use(limiter);
 
-// Auth middleware
+const isValidAuthToken = (value) => {
+  return typeof value === 'string' && value.length > 0 && value === adminPassword;
+};
+
+const getBearerToken = (authorizationHeader) => {
+  if (typeof authorizationHeader !== 'string') return null;
+  if (!authorizationHeader.toLowerCase().startsWith('bearer ')) return null;
+  return authorizationHeader.slice(7).trim();
+};
+
+const isAuthenticated = (req, { allowQueryToken = false } = {}) => {
+  const sessionToken = req.cookies.session;
+  const bearerToken = getBearerToken(req.headers.authorization);
+  const finchwireToken = req.headers['x-finchwire-token'];
+  const queryToken = allowQueryToken ? req.query.token : null;
+
+  return (
+    isValidAuthToken(sessionToken) ||
+    isValidAuthToken(bearerToken) ||
+    isValidAuthToken(finchwireToken) ||
+    isValidAuthToken(queryToken)
+  );
+};
+
+// Authentication middleware (API)
 const auth = (req, res, next) => {
-  const sessionToken = req.cookies.session || req.headers['x-finchwire-token'];
-  if (process.env.MEDIA_DROP_ADMIN_PASSWORD && sessionToken === process.env.MEDIA_DROP_ADMIN_PASSWORD) {
+  if (isAuthenticated(req)) {
+    return next();
+  }
+  res.status(401).json({ error: 'Unauthorized' });
+};
+
+// Media auth middleware.
+// Allows query token so external players (e.g., VLC) can open protected media URLs.
+const mediaAuth = (req, res, next) => {
+  if (isAuthenticated(req, { allowQueryToken: true })) {
     return next();
   }
   res.status(401).json({ error: 'Unauthorized' });
@@ -239,7 +267,7 @@ const MIME_TYPES = {
 };
 
 // Media Streaming with Range support — supports subfolders via wildcard
-app.get('/media/*', auth, (req, res) => {
+app.get('/media/*', mediaAuth, (req, res) => {
   const filename = req.params[0];
   const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
   const libraryRoot = path.join(storageRoot, 'library');
