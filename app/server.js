@@ -12,6 +12,7 @@ const UrlHelper = require('./utils/url');
 const app = express();
 const port = process.env.PORT || 8080;
 const adminPassword = process.env.MEDIA_DROP_ADMIN_PASSWORD || 'change-me';
+const allowPublicMedia = process.env.MEDIA_DROP_ALLOW_PUBLIC_MEDIA === 'true';
 
 // Initialize DB and Downloader
 const db = new DBManager();
@@ -69,6 +70,9 @@ const auth = (req, res, next) => {
 // Media auth middleware.
 // Allows query token so external players (e.g., VLC) can open protected media URLs.
 const mediaAuth = (req, res, next) => {
+  if (allowPublicMedia) {
+    return next();
+  }
   if (isAuthenticated(req, { allowQueryToken: true })) {
     return next();
   }
@@ -397,6 +401,7 @@ app.listen(port, '127.0.0.1', () => {
   console.log(`📍 Local Address: http://127.0.0.1:${port}`);
   console.log(`📂 Storage Root:  ${process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop'}`);
   console.log(`🛡️  Admin Auth:    ENABLED`);
+  console.log(`🎞️  Public Media:  ${allowPublicMedia ? 'ENABLED' : 'DISABLED'}`);
   console.log(`🔥 Rate Limiting:  ENABLED (100/hr)`);
   console.log('---------------------------------------------------------');
   
