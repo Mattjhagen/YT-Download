@@ -11,6 +11,7 @@ const UrlHelper = require('./utils/url');
 
 const app = express();
 const port = process.env.PORT || 8080;
+const bindHost = process.env.MEDIA_DROP_BIND_HOST || '127.0.0.1';
 const adminPassword = process.env.MEDIA_DROP_ADMIN_PASSWORD || 'change-me';
 const allowPublicMedia = process.env.MEDIA_DROP_ALLOW_PUBLIC_MEDIA === 'true';
 
@@ -413,10 +414,10 @@ setInterval(runCleanup, CLEANUP_INTERVAL);
 // Also run once on startup (after 1 minute to avoid heavy load)
 setTimeout(runCleanup, 60 * 1000);
 
-app.listen(port, '127.0.0.1', () => {
+app.listen(port, bindHost, () => {
   console.log('---------------------------------------------------------');
   console.log(`🚀 Media Drop server starting...`);
-  console.log(`📍 Local Address: http://127.0.0.1:${port}`);
+  console.log(`📍 Local Address: http://${bindHost}:${port}`);
   console.log(`📂 Storage Root:  ${process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop'}`);
   console.log(`🛡️  Admin Auth:    ENABLED`);
   console.log(`🎞️  Public Media:  ${allowPublicMedia ? 'ENABLED' : 'DISABLED'}`);
