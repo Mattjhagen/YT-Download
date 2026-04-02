@@ -5,7 +5,7 @@ const URL = require('url').URL;
  */
 class UrlHelper {
     static getBase() {
-        const base = process.env.MEDIA_DROP_HTTP_BASE_URL || 'https://yt.finchwire.site';
+        const base = process.env.MEDIA_DROP_HTTP_BASE_URL || 'https://media.p3lending.space';
         // Clean trailing slash
         return base.replace(/\/$/, '');
     }
