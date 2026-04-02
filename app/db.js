@@ -45,6 +45,7 @@ class DBManager {
         is_audio INTEGER DEFAULT 0,
         last_viewed_at TEXT,
         view_count INTEGER DEFAULT 0,
+        keep_forever INTEGER DEFAULT 0,
         deleted_at TEXT
       )
     `);
@@ -55,6 +56,7 @@ class DBManager {
     try { this.db.exec('ALTER TABLE jobs ADD COLUMN is_audio INTEGER DEFAULT 0'); } catch(e) {}
     try { this.db.exec('ALTER TABLE jobs ADD COLUMN last_viewed_at TEXT'); } catch(e) {}
     try { this.db.exec('ALTER TABLE jobs ADD COLUMN view_count INTEGER DEFAULT 0'); } catch(e) {}
+    try { this.db.exec('ALTER TABLE jobs ADD COLUMN keep_forever INTEGER DEFAULT 0'); } catch(e) {}
     try { this.db.exec('ALTER TABLE jobs ADD COLUMN deleted_at TEXT'); } catch(e) {}
     try { this.db.exec('ALTER TABLE jobs ADD COLUMN error_message TEXT'); } catch(e) {}
 
@@ -179,11 +181,13 @@ class DBManager {
         SELECT * FROM jobs 
         WHERE status = 'completed' 
         AND deleted_at IS NULL
+        AND IFNULL(keep_forever, 0) = 0
         AND (
             (last_viewed_at IS NOT NULL AND last_viewed_at < ?) OR
-            (last_viewed_at IS NULL AND created_at < ?)
+            (last_viewed_at IS NULL AND completed_at IS NOT NULL AND completed_at < ?) OR
+            (last_viewed_at IS NULL AND completed_at IS NULL AND created_at < ?)
         )
-    `).all(limitIso, limitIso);
+    `).all(limitIso, limitIso, limitIso);
   }
 
   getJobByFilename(filename) {
@@ -201,6 +205,14 @@ class DBManager {
             deleted_at = ? 
         WHERE id = ?
     `).run(new Date().toISOString(), id);
+  }
+
+  setKeepForever(id, keepForever) {
+    this.db.prepare(`
+        UPDATE jobs
+        SET keep_forever = ?
+        WHERE id = ?
+    `).run(keepForever ? 1 : 0, id);
   }
 
   getAuditLogs(limit = 100) {

@@ -204,6 +204,24 @@ app.delete('/api/downloads/:id', auth, (req, res) => {
   res.json({ success: true });
 });
 
+app.patch('/api/downloads/:id/keep', auth, (req, res) => {
+  const { id } = req.params;
+  const { keep_forever } = req.body || {};
+
+  if (typeof keep_forever !== 'boolean') {
+    return res.status(400).json({ error: 'keep_forever must be boolean' });
+  }
+
+  const job = db.getJob(id);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  db.setKeepForever(id, keep_forever);
+  const updated = db.getJob(id);
+  res.json({ success: true, job: updated });
+});
+
 // SSE for progress
 app.get('/api/events', auth, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
