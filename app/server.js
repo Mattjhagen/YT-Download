@@ -12,12 +12,23 @@ const UrlHelper = require('./utils/url');
 const app = express();
 const port = process.env.PORT || 8080;
 const bindHost = process.env.MEDIA_DROP_BIND_HOST || '127.0.0.1';
-const adminPassword = process.env.MEDIA_DROP_ADMIN_PASSWORD || 'change-me';
 const allowPublicMedia = process.env.MEDIA_DROP_ALLOW_PUBLIC_MEDIA === 'true';
+const envAdminPassword = process.env.MEDIA_DROP_ADMIN_PASSWORD || 'change-me';
+const envAiProvider = process.env.MEDIA_DROP_AI_PROVIDER || 'none';
+const envTtsProvider = process.env.MEDIA_DROP_TTS_PROVIDER || 'none';
+const envAiApiKey = process.env.MEDIA_DROP_AI_API_KEY || '';
+const envTtsApiKey = process.env.MEDIA_DROP_TTS_API_KEY || '';
+const ALLOWED_AI_PROVIDERS = new Set(['none', 'gemini', 'openai', 'anthropic', 'groq']);
+const ALLOWED_TTS_PROVIDERS = new Set(['none', 'gemini', 'openai', 'elevenlabs']);
 
 // Initialize DB and Downloader
 const db = new DBManager();
 const downloader = new Downloader(db);
+let adminPassword = db.getSetting('admin_password', envAdminPassword) || envAdminPassword;
+
+if (!db.getSetting('admin_password') && envAdminPassword) {
+  db.setSetting('admin_password', envAdminPassword);
+}
 
 // Middleware
 app.use(express.json());
@@ -51,6 +62,36 @@ app.use(limiter);
 
 const getStorageRoot = () => process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
 const getLibraryRoot = () => path.join(getStorageRoot(), 'library');
+const getRequestIp = (req) => req.headers['cf-connecting-ip'] || req.ip;
+const getRequestUserAgent = (req) => req.headers['user-agent'];
+
+const normalizeProvider = (value, allowedValues, fallback) => {
+  const candidate = String(value || '').trim().toLowerCase();
+  if (allowedValues.has(candidate)) return candidate;
+  return fallback;
+};
+
+const getServerSettings = () => {
+  const aiProvider = normalizeProvider(
+    db.getSetting('ai_provider', envAiProvider),
+    ALLOWED_AI_PROVIDERS,
+    'none'
+  );
+  const ttsProvider = normalizeProvider(
+    db.getSetting('tts_provider', envTtsProvider),
+    ALLOWED_TTS_PROVIDERS,
+    'none'
+  );
+  const aiApiKey = db.getSetting('ai_api_key', envAiApiKey) || '';
+  const ttsApiKey = db.getSetting('tts_api_key', envTtsApiKey) || '';
+
+  return {
+    ai_provider: aiProvider,
+    tts_provider: ttsProvider,
+    has_ai_api_key: Boolean(String(aiApiKey).trim()),
+    has_tts_api_key: Boolean(String(ttsApiKey).trim()),
+  };
+};
 
 const normalizeRelativePath = (value) => {
   if (!value) return '';
@@ -189,8 +230,8 @@ let sseClients = [];
 
 // API Routes
 app.post('/api/login', (req, res) => {
-  const { password } = req.body;
-  if (process.env.MEDIA_DROP_ADMIN_PASSWORD && password === process.env.MEDIA_DROP_ADMIN_PASSWORD) {
+  const { password } = req.body || {};
+  if (adminPassword && password === adminPassword) {
     res.cookie('session', password, { httpOnly: true, secure: true, sameSite: 'strict' });
     res.json({ success: true });
   } else {
@@ -205,7 +246,115 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/session', (req, res) => {
   const sessionToken = req.cookies.session;
-  res.json({ authenticated: process.env.MEDIA_DROP_ADMIN_PASSWORD && sessionToken === process.env.MEDIA_DROP_ADMIN_PASSWORD });
+  res.json({ authenticated: Boolean(adminPassword) && sessionToken === adminPassword });
+});
+
+app.post('/api/account/password', auth, (req, res) => {
+  const { current_password, new_password } = req.body || {};
+  const ip = getRequestIp(req);
+  const userAgent = getRequestUserAgent(req);
+
+  if (typeof current_password !== 'string' || typeof new_password !== 'string') {
+    return res.status(400).json({ error: 'current_password and new_password are required' });
+  }
+
+  const nextPassword = new_password.trim();
+  if (nextPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  }
+
+  if (current_password !== adminPassword) {
+    db.logAction('PASSWORD_CHANGE_FAILED', {
+      ip,
+      user_agent: userAgent,
+      status: 'failed',
+      details: { reason: 'invalid_current_password' },
+    });
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+
+  adminPassword = nextPassword;
+  db.setSetting('admin_password', nextPassword);
+  db.logAction('PASSWORD_CHANGED', {
+    ip,
+    user_agent: userAgent,
+    status: 'success',
+  });
+
+  // Keep current session valid with new credential.
+  res.cookie('session', nextPassword, { httpOnly: true, secure: true, sameSite: 'strict' });
+  return res.json({ success: true });
+});
+
+app.get('/api/settings', auth, (req, res) => {
+  return res.json({
+    success: true,
+    settings: getServerSettings(),
+  });
+});
+
+app.patch('/api/settings', auth, (req, res) => {
+  const payload = req.body || {};
+  const ip = getRequestIp(req);
+  const userAgent = getRequestUserAgent(req);
+  const updates = {};
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'ai_provider')) {
+    if (typeof payload.ai_provider !== 'string') {
+      return res.status(400).json({ error: 'ai_provider must be a string' });
+    }
+    const normalized = normalizeProvider(payload.ai_provider, ALLOWED_AI_PROVIDERS, '');
+    if (!normalized) {
+      return res.status(400).json({ error: 'Unsupported ai_provider value' });
+    }
+    updates.ai_provider = normalized;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'tts_provider')) {
+    if (typeof payload.tts_provider !== 'string') {
+      return res.status(400).json({ error: 'tts_provider must be a string' });
+    }
+    const normalized = normalizeProvider(payload.tts_provider, ALLOWED_TTS_PROVIDERS, '');
+    if (!normalized) {
+      return res.status(400).json({ error: 'Unsupported tts_provider value' });
+    }
+    updates.tts_provider = normalized;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'ai_api_key')) {
+    if (typeof payload.ai_api_key !== 'string') {
+      return res.status(400).json({ error: 'ai_api_key must be a string' });
+    }
+    updates.ai_api_key = payload.ai_api_key.trim();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'tts_api_key')) {
+    if (typeof payload.tts_api_key !== 'string') {
+      return res.status(400).json({ error: 'tts_api_key must be a string' });
+    }
+    updates.tts_api_key = payload.tts_api_key.trim();
+  }
+
+  const keys = Object.keys(updates);
+  if (keys.length === 0) {
+    return res.status(400).json({ error: 'No valid settings supplied' });
+  }
+
+  keys.forEach((key) => {
+    db.setSetting(key, updates[key]);
+  });
+
+  db.logAction('APP_SETTINGS_UPDATED', {
+    ip,
+    user_agent: userAgent,
+    status: 'success',
+    details: { updated_keys: keys },
+  });
+
+  return res.json({
+    success: true,
+    settings: getServerSettings(),
+  });
 });
 
 app.get('/api/downloads', auth, (req, res) => {

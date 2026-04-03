@@ -83,6 +83,15 @@ class DBManager {
         details TEXT
       )
     `);
+
+    // App-level settings (admin password, AI/TTS providers, API keys, etc.)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      )
+    `);
   }
 
   createJob(jobData) {
@@ -213,6 +222,48 @@ class DBManager {
         SET keep_forever = ?
         WHERE id = ?
     `).run(keepForever ? 1 : 0, id);
+  }
+
+  getSetting(key, fallback = null) {
+    const row = this.db
+      .prepare('SELECT value FROM app_settings WHERE key = ? LIMIT 1')
+      .get(key);
+    if (!row || row.value === undefined || row.value === null) {
+      return fallback;
+    }
+    return row.value;
+  }
+
+  setSetting(key, value) {
+    this.db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at
+    `).run(key, value);
+    return this.getSetting(key);
+  }
+
+  getSettings(keys = []) {
+    if (!Array.isArray(keys) || keys.length === 0) {
+      const rows = this.db.prepare('SELECT key, value FROM app_settings').all();
+      return rows.reduce((acc, row) => {
+        acc[row.key] = row.value;
+        return acc;
+      }, {});
+    }
+
+    const placeholders = keys.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(`SELECT key, value FROM app_settings WHERE key IN (${placeholders})`)
+      .all(...keys);
+
+    const map = {};
+    rows.forEach((row) => {
+      map[row.key] = row.value;
+    });
+    return map;
   }
 
   getAuditLogs(limit = 100) {
