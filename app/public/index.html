@@ -33,6 +33,7 @@
             <div class="nav-links">
                 <a href="#" class="nav-link active" data-target="dashboard-page">Dashboard</a>
                 <a href="#" class="nav-link" data-target="files-page">Library</a>
+                <a href="#" class="nav-link" data-target="discover-page">Discover</a>
                 <a href="#" class="nav-link" data-target="settings-page">Settings</a>
             </div>
             <button id="logout-btn" class="text-btn">Logout</button>
@@ -40,6 +41,25 @@
 
         <main>
             <section id="dashboard-page" class="page">
+                <div class="card ai-card">
+                    <h2>Ask FinchWire AI</h2>
+                    <p class="card-subtitle">
+                        Ask for media ideas, summaries, and next-watch suggestions tuned to your usage.
+                    </p>
+                    <div class="form-group">
+                        <div class="input-stack single">
+                            <input type="text" id="ai-prompt" placeholder="Ask FinchWire AI (e.g. summarize AI regulation updates + suggest a podcast)">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <button id="ai-ask-btn" class="primary-btn">Ask AI</button>
+                    </div>
+                    <div id="ai-response" class="ai-response hidden"></div>
+                    <div id="ai-actions" class="form-row hidden">
+                        <button id="ai-queue-btn" class="primary-btn sm-btn">Queue Suggested Media</button>
+                    </div>
+                </div>
+
                 <div class="card submit-card">
                     <h2>Fetch Video or Audio</h2>
                     <div class="form-group">
@@ -83,6 +103,22 @@
                 </div>
             </section>
 
+            <section id="discover-page" class="page hidden">
+                <div class="card">
+                    <div class="jobs-header">
+                        <h2>Discover</h2>
+                        <button id="refresh-news-btn" class="icon-btn" title="Refresh discover feed">
+                            <i data-lucide="refresh-cw"></i>
+                        </button>
+                    </div>
+                    <p class="settings-note">
+                        Personalized from what you ask FinchWire AI and what you watch/download.
+                    </p>
+                    <div id="discover-topics" class="chip-row"></div>
+                    <div id="discover-list" class="discover-list"></div>
+                </div>
+            </section>
+
             <section id="settings-page" class="page hidden">
                 <div class="card">
                     <h2>FinchWire Settings</h2>
@@ -95,6 +131,57 @@
                             <label>Playback Mode</label>
                             <input type="text" readonly value="Browser-native player">
                         </div>
+                    </div>
+                    <hr>
+                    <h3>Change Password</h3>
+                    <div class="settings-group">
+                        <div class="setting-item">
+                            <label>Current Password</label>
+                            <input type="password" id="setting-current-password" placeholder="Current password">
+                        </div>
+                        <div class="setting-item">
+                            <label>New Password</label>
+                            <input type="password" id="setting-new-password" placeholder="New password (min 8 chars)">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <button id="change-password-btn" class="primary-btn sm-btn">Update Password</button>
+                    </div>
+                    <hr>
+                    <h3>AI / TTS Providers</h3>
+                    <div class="settings-group">
+                        <div class="setting-item">
+                            <label>AI Provider</label>
+                            <select id="setting-ai-provider">
+                                <option value="none">None</option>
+                                <option value="gemini">Gemini</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="groq">Groq</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>TTS Provider</label>
+                            <select id="setting-tts-provider">
+                                <option value="none">None</option>
+                                <option value="gemini">Gemini</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="elevenlabs">ElevenLabs</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <div class="setting-item">
+                            <label>AI API Key</label>
+                            <input type="password" id="setting-ai-api-key" placeholder="Paste AI API key (optional)">
+                        </div>
+                        <div class="setting-item">
+                            <label>TTS API Key</label>
+                            <input type="password" id="setting-tts-api-key" placeholder="Paste TTS API key (optional)">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <button id="save-provider-settings-btn" class="primary-btn sm-btn">Save Provider Settings</button>
                     </div>
                     <hr>
                     <p class="settings-note">

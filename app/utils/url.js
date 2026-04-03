@@ -38,6 +38,13 @@ class UrlHelper {
         return url.toString();
     }
 
+    static buildMediaUrlWithToken(filename, token) {
+        const mediaUrl = this.buildMediaUrl(filename);
+        if (!mediaUrl || !token) return mediaUrl;
+        const separator = mediaUrl.includes('?') ? '&' : '?';
+        return `${mediaUrl}${separator}token=${encodeURIComponent(token)}`;
+    }
+
     static buildVlcUrl(filename) {
         if (!filename) return '';
         const mediaUrl = this.buildMediaUrl(filename);

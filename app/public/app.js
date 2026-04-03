@@ -1,6 +1,7 @@
 const App = {
     init() {
         this.currentTab = 'dashboard-page';
+        this.pendingSuggestedUrl = '';
         this.cacheDOM();
         this.bindEvents();
         this.checkSession();
@@ -29,6 +30,28 @@ const App = {
         this.closeModalBtn = document.getElementById('close-modal-btn');
         this.playerContainer = document.getElementById('player-container');
         this.playerTitle = document.getElementById('player-title');
+
+        // Dashboard AI
+        this.aiPromptInput = document.getElementById('ai-prompt');
+        this.aiAskBtn = document.getElementById('ai-ask-btn');
+        this.aiResponse = document.getElementById('ai-response');
+        this.aiActions = document.getElementById('ai-actions');
+        this.aiQueueBtn = document.getElementById('ai-queue-btn');
+
+        // Discover
+        this.refreshNewsBtn = document.getElementById('refresh-news-btn');
+        this.discoverTopics = document.getElementById('discover-topics');
+        this.discoverList = document.getElementById('discover-list');
+
+        // Settings
+        this.settingCurrentPassword = document.getElementById('setting-current-password');
+        this.settingNewPassword = document.getElementById('setting-new-password');
+        this.changePasswordBtn = document.getElementById('change-password-btn');
+        this.settingAiProvider = document.getElementById('setting-ai-provider');
+        this.settingTtsProvider = document.getElementById('setting-tts-provider');
+        this.settingAiApiKey = document.getElementById('setting-ai-api-key');
+        this.settingTtsApiKey = document.getElementById('setting-tts-api-key');
+        this.saveProviderSettingsBtn = document.getElementById('save-provider-settings-btn');
     },
 
     bindEvents() {
@@ -37,6 +60,11 @@ const App = {
         this.submitUrlBtn.onclick = () => this.submitUrl();
         this.refreshJobsBtn.onclick = () => this.loadDashboard();
         this.closeModalBtn.onclick = () => this.closePlayer();
+        this.aiAskBtn.onclick = () => this.askAi();
+        this.aiQueueBtn.onclick = () => this.queueSuggestedFromAi();
+        this.refreshNewsBtn.onclick = () => this.loadDiscover();
+        this.changePasswordBtn.onclick = () => this.changePassword();
+        this.saveProviderSettingsBtn.onclick = () => this.saveProviderSettings();
 
         this.navLinks.forEach((link) => {
             link.onclick = (event) => this.switchTab(event);
@@ -48,6 +76,9 @@ const App = {
 
         this.mediaUrlInput.onkeyup = (event) => {
             if (event.key === 'Enter') this.submitUrl();
+        };
+        this.aiPromptInput.onkeyup = (event) => {
+            if (event.key === 'Enter') this.askAi();
         };
 
         this.mediaModal.onclick = (event) => {
@@ -134,6 +165,7 @@ const App = {
         this.loginContainer.classList.add('hidden');
         this.appContainer.classList.remove('hidden');
         this.loadDashboard();
+        this.loadSettings();
         this.startSSE();
         if (window.lucide) lucide.createIcons();
     },
@@ -152,6 +184,8 @@ const App = {
 
         if (target === 'dashboard-page') this.loadDashboard();
         if (target === 'files-page') this.loadFiles();
+        if (target === 'discover-page') this.loadDiscover();
+        if (target === 'settings-page') this.loadSettings();
     },
 
     async submitUrl() {
@@ -182,6 +216,68 @@ const App = {
         } catch (error) {
             this.showToast(error.message, 'error');
         }
+    },
+
+    async askAi() {
+        const prompt = this.aiPromptInput.value.trim();
+        if (!prompt) {
+            this.showToast('Enter a prompt first', 'error');
+            return;
+        }
+
+        this.aiAskBtn.disabled = true;
+        this.aiAskBtn.textContent = 'Thinking...';
+        this.aiResponse.classList.add('hidden');
+        this.aiActions.classList.add('hidden');
+
+        try {
+            const payload = await this.request('/api/ai/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt }),
+            });
+
+            const answerText = String(payload.answer || payload.message || '').trim() || 'No response available.';
+            const suggestedUrl = String(payload.suggested_url || '').trim();
+            const lines = [
+                answerText,
+                '',
+                payload.provider ? `Provider: ${payload.provider}` : null,
+                payload.query ? `Search query: ${payload.query}` : null,
+                suggestedUrl ? `Suggested media URL: ${suggestedUrl}` : null,
+            ].filter(Boolean);
+
+            this.aiResponse.textContent = lines.join('\n');
+            this.aiResponse.classList.remove('hidden');
+            this.pendingSuggestedUrl = suggestedUrl || '';
+
+            if (this.pendingSuggestedUrl) {
+                this.aiActions.classList.remove('hidden');
+            }
+        } catch (error) {
+            this.showToast(error.message, 'error');
+        } finally {
+            this.aiAskBtn.disabled = false;
+            this.aiAskBtn.textContent = 'Ask AI';
+        }
+    },
+
+    async queueSuggestedFromAi() {
+        const suggestedUrl = String(this.pendingSuggestedUrl || '').trim();
+        if (!suggestedUrl) {
+            this.showToast('No suggested URL available yet', 'error');
+            return;
+        }
+
+        this.mediaUrlInput.value = suggestedUrl;
+        this.switchToTab('dashboard-page');
+        await this.submitUrl();
+    },
+
+    switchToTab(targetId) {
+        const targetLink = Array.from(this.navLinks).find((link) => link.dataset.target === targetId);
+        if (!targetLink) return;
+        targetLink.click();
     },
 
     async loadDashboard() {
@@ -297,6 +393,54 @@ const App = {
         }
     },
 
+    async loadDiscover() {
+        try {
+            this.discoverList.innerHTML = '<div class="empty-state">Loading discover feed...</div>';
+            const payload = await this.request('/api/discover/news');
+            const interests = Array.isArray(payload?.interests) ? payload.interests : [];
+            const articles = Array.isArray(payload?.articles) ? payload.articles : [];
+
+            this.discoverTopics.innerHTML = interests.length
+                ? interests.map((topic) => `<span class="topic-chip">${this.escapeHtml(topic)}</span>`).join('')
+                : '<span class="topic-chip">general</span>';
+
+            this.discoverList.innerHTML = articles.length
+                ? articles.map((item) => this.renderDiscoverCard(item)).join('')
+                : '<div class="empty-state">No stories yet. Ask FinchWire AI and watch more media to personalize this feed.</div>';
+            if (window.lucide) lucide.createIcons();
+        } catch (error) {
+            this.discoverList.innerHTML = `<div class="empty-state">Failed to load discover feed: ${this.escapeHtml(error.message)}</div>`;
+        }
+    },
+
+    renderDiscoverCard(item) {
+        const title = this.escapeHtml(item.title || 'Untitled');
+        const summary = this.escapeHtml(item.summary || '');
+        const source = this.escapeHtml(item.source || 'News');
+        const date = item.publishedAt ? new Date(item.publishedAt).toLocaleDateString() : '';
+        const link = this.escapeHtml(item.link || '#');
+        const image = String(item.imageUrl || '').trim();
+        const video = String(item.videoUrl || '').trim();
+        const imageTag = image
+            ? `<img src="${this.escapeAttr(image)}" alt="${title}" class="discover-image" loading="lazy" referrerpolicy="no-referrer">`
+            : '<div class="discover-image"></div>';
+
+        return `
+            <article class="discover-card">
+                ${imageTag}
+                <div class="discover-body">
+                    <div class="discover-meta">${source}${date ? ` • ${this.escapeHtml(date)}` : ''}</div>
+                    <div class="discover-title">${title}</div>
+                    <div class="discover-summary">${summary}</div>
+                    <div class="discover-actions">
+                        <a class="link-btn" href="${link}" target="_blank" rel="noopener noreferrer">Read Article</a>
+                        ${video ? `<a class="link-btn" href="${this.escapeAttr(video)}" target="_blank" rel="noopener noreferrer">Play Video</a>` : ''}
+                    </div>
+                </div>
+            </article>
+        `;
+    },
+
     renderFileItem(file) {
         const mediaUrl = this.toSameOriginMediaUrl(file.url);
         const isAudio = this.isAudioFilename(file.name);
@@ -350,6 +494,78 @@ const App = {
             this.showToast('File deleted');
             this.loadFiles();
             if (this.currentTab === 'dashboard-page') this.loadDashboard();
+        } catch (error) {
+            this.showToast(error.message, 'error');
+        }
+    },
+
+    async loadSettings() {
+        try {
+            const payload = await this.request('/api/settings');
+            const settings = payload?.settings || {};
+            this.settingAiProvider.value = settings.ai_provider || 'none';
+            this.settingTtsProvider.value = settings.tts_provider || 'none';
+            this.settingAiApiKey.value = '';
+            this.settingTtsApiKey.value = '';
+        } catch (error) {
+            this.showToast(error.message, 'error');
+        }
+    },
+
+    async saveProviderSettings() {
+        try {
+            const payload = {
+                ai_provider: this.settingAiProvider.value,
+                tts_provider: this.settingTtsProvider.value,
+            };
+
+            const aiApiKey = this.settingAiApiKey.value.trim();
+            const ttsApiKey = this.settingTtsApiKey.value.trim();
+            if (aiApiKey) payload.ai_api_key = aiApiKey;
+            if (ttsApiKey) payload.tts_api_key = ttsApiKey;
+
+            await this.request('/api/settings', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            this.settingAiApiKey.value = '';
+            this.settingTtsApiKey.value = '';
+            this.showToast('Provider settings saved');
+            this.loadSettings();
+        } catch (error) {
+            this.showToast(error.message, 'error');
+        }
+    },
+
+    async changePassword() {
+        const currentPassword = this.settingCurrentPassword.value.trim();
+        const newPassword = this.settingNewPassword.value.trim();
+
+        if (!currentPassword || !newPassword) {
+            this.showToast('Enter current and new password', 'error');
+            return;
+        }
+
+        if (newPassword.length < 8) {
+            this.showToast('New password must be at least 8 characters', 'error');
+            return;
+        }
+
+        try {
+            await this.request('/api/account/password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    current_password: currentPassword,
+                    new_password: newPassword,
+                }),
+            });
+
+            this.settingCurrentPassword.value = '';
+            this.settingNewPassword.value = '';
+            this.showToast('Password updated');
         } catch (error) {
             this.showToast(error.message, 'error');
         }
@@ -425,6 +641,10 @@ const App = {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    },
+
+    escapeAttr(value) {
+        return this.escapeHtml(value).replace(/`/g, '&#96;');
     },
 
     showToast(message, type = 'success') {

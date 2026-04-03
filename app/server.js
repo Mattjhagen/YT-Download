@@ -93,6 +93,371 @@ const getServerSettings = () => {
   };
 };
 
+const normalizeText = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'that', 'with', 'this', 'from', 'your', 'you', 'are', 'was', 'have', 'has',
+  'will', 'into', 'just', 'what', 'when', 'where', 'which', 'their', 'there', 'they', 'them', 'then',
+  'about', 'after', 'before', 'while', 'would', 'could', 'should', 'also', 'more', 'most', 'some',
+  'very', 'over', 'under', 'onto', 'than', 'been', 'being', 'were', 'had', 'did', 'does', 'its', 'it',
+  'our', 'out', 'off', 'any', 'all', 'new', 'now', 'not', 'too', 'can', 'his', 'her', 'she', 'him',
+  'how', 'why', 'who', 'use', 'using', 'used', 'via', 'app', 'video', 'videos', 'news', 'article',
+  'watch', 'watching', 'download', 'downloads', 'http', 'https', 'www', 'com', 'org', 'net'
+]);
+
+const tokenize = (value) =>
+  normalizeText(value)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3)
+    .filter((token) => !STOP_WORDS.has(token))
+    .filter((token) => !/^\d+$/.test(token));
+
+const scoreTerms = (terms, weight, signalMap) => {
+  terms.forEach((term) => {
+    signalMap[term] = (signalMap[term] || 0) + weight;
+  });
+};
+
+const getTopInterests = () => {
+  const signalMap = {};
+  const jobs = db.getAllJobs().slice(0, 200);
+  jobs.forEach((job) => {
+    scoreTerms(tokenize(`${job.filename || ''} ${job.source_domain || ''}`), 1.5, signalMap);
+    if (job.view_count > 0) {
+      scoreTerms(tokenize(job.filename || ''), Math.min(4, 1 + Number(job.view_count || 0) * 0.2), signalMap);
+    }
+  });
+
+  const logs = db.getAuditLogs(120);
+  logs.forEach((entry) => {
+    if (entry.action === 'AI_SEARCH' && entry.details) {
+      try {
+        const details = JSON.parse(entry.details);
+        scoreTerms(tokenize(details.prompt || ''), 2.2, signalMap);
+      } catch {
+        // Ignore malformed details payload
+      }
+    }
+  });
+
+  return Object.entries(signalMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([term]) => term);
+};
+
+const DEFAULT_DISCOVER_TOPICS = [
+  'artificial intelligence',
+  'fintech',
+  'ethereum',
+  'crypto regulation',
+  'machine learning',
+];
+
+const BASE_DISCOVER_FEEDS = [
+  'https://www.theverge.com/rss/index.xml',
+  'https://www.engadget.com/rss.xml',
+  'https://feeds.bbci.co.uk/news/technology/rss.xml',
+  'https://www.wired.com/feed/rss',
+  'https://www.coindesk.com/arc/outboundfeeds/rss/',
+];
+
+const decodeEntities = (value) =>
+  String(value || '')
+    .replace(/<!\[CDATA\[/g, '')
+    .replace(/\]\]>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x2F;/g, '/');
+
+const stripHtml = (value) => decodeEntities(value).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
+const tagValue = (input, tag) => {
+  const match = input.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return match ? decodeEntities(match[1]).trim() : '';
+};
+
+const getFirstMatch = (input, patterns) => {
+  for (const pattern of patterns) {
+    const match = input.match(pattern);
+    if (match && match[1]) {
+      return decodeEntities(match[1]).trim();
+    }
+  }
+  return '';
+};
+
+const extractLinkFromFeedItem = (itemXml) => {
+  const rssLink = tagValue(itemXml, 'link');
+  if (rssLink && /^https?:\/\//i.test(rssLink)) return rssLink;
+
+  const atomAlternateLink = getFirstMatch(itemXml, [
+    /<link[^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["'][^>]*\/?>/i,
+  ]);
+  if (atomAlternateLink) return atomAlternateLink;
+
+  return getFirstMatch(itemXml, [
+    /<link[^>]*href=["']([^"']+)["'][^>]*\/?>/i,
+  ]);
+};
+
+const extractImageFromFeedItem = (itemXml) => {
+  const directImage = getFirstMatch(itemXml, [
+    /<media:thumbnail[^>]*url=["']([^"']+)["'][^>]*\/?>/i,
+    /<media:content[^>]*type=["']image\/[^"']+["'][^>]*url=["']([^"']+)["'][^>]*\/?>/i,
+    /<media:content[^>]*url=["']([^"']+)["'][^>]*type=["']image\/[^"']+["'][^>]*\/?>/i,
+    /<enclosure[^>]*type=["']image\/[^"']+["'][^>]*url=["']([^"']+)["'][^>]*\/?>/i,
+    /<enclosure[^>]*url=["']([^"']+)["'][^>]*type=["']image\/[^"']+["'][^>]*\/?>/i,
+    /<img[^>]*src=["']([^"']+)["'][^>]*>/i,
+  ]);
+  if (directImage) return directImage;
+
+  const contentEncoded = tagValue(itemXml, 'content:encoded') || tagValue(itemXml, 'description');
+  if (!contentEncoded) return '';
+  return getFirstMatch(contentEncoded, [/<img[^>]*src=["']([^"']+)["'][^>]*>/i]);
+};
+
+const extractVideoFromFeedItem = (itemXml) =>
+  getFirstMatch(itemXml, [
+    /<media:content[^>]*type=["']video\/[^"']+["'][^>]*url=["']([^"']+)["'][^>]*\/?>/i,
+    /<media:content[^>]*url=["']([^"']+)["'][^>]*type=["']video\/[^"']+["'][^>]*\/?>/i,
+    /<enclosure[^>]*type=["']video\/[^"']+["'][^>]*url=["']([^"']+)["'][^>]*\/?>/i,
+    /<enclosure[^>]*url=["']([^"']+)["'][^>]*type=["']video\/[^"']+["'][^>]*\/?>/i,
+    /<iframe[^>]*src=["']([^"']+)["'][^>]*>/i,
+  ]);
+
+const parseFeedItems = (xml) => {
+  const rssItems = xml.match(/<item[\s\S]*?<\/item>/gi) || [];
+  const atomEntries = xml.match(/<entry[\s\S]*?<\/entry>/gi) || [];
+  const blocks = [...rssItems, ...atomEntries];
+
+  return blocks
+    .map((itemXml, index) => {
+      const title = stripHtml(tagValue(itemXml, 'title')) || 'Untitled';
+      const link = extractLinkFromFeedItem(itemXml);
+      if (!link) return null;
+
+      const summary =
+        stripHtml(tagValue(itemXml, 'description')) ||
+        stripHtml(tagValue(itemXml, 'summary')) ||
+        stripHtml(tagValue(itemXml, 'content:encoded')) ||
+        title;
+
+      const publishedRaw = tagValue(itemXml, 'pubDate') || tagValue(itemXml, 'published') || tagValue(itemXml, 'updated');
+      const publishedAt = Number.isNaN(Date.parse(publishedRaw || '')) ? new Date().toISOString() : new Date(publishedRaw).toISOString();
+
+      const source = tagValue(itemXml, 'source') || tagValue(itemXml, 'dc:creator') || (() => {
+        try {
+          return new URL(link).hostname.replace(/^www\./i, '');
+        } catch {
+          return 'News';
+        }
+      })();
+
+      return {
+        id: `${link}-${index}`,
+        title,
+        summary,
+        link,
+        imageUrl: extractImageFromFeedItem(itemXml) || undefined,
+        videoUrl: extractVideoFromFeedItem(itemXml) || undefined,
+        source,
+        publishedAt,
+      };
+    })
+    .filter(Boolean);
+};
+
+const scoreDiscoverArticle = (article, interests) => {
+  const haystack = normalizeText(`${article.title} ${article.summary} ${article.source}`);
+  let score = 0;
+  const matchedInterests = [];
+
+  interests.forEach((interest) => {
+    const normalized = normalizeText(interest);
+    if (!normalized) return;
+    if (haystack.includes(normalized)) {
+      score += 8;
+      matchedInterests.push(normalized);
+      return;
+    }
+    const tokenHits = tokenize(normalized).filter((token) => haystack.includes(token)).length;
+    if (tokenHits > 0) {
+      score += tokenHits * 2;
+      if (tokenHits >= 2) matchedInterests.push(normalized);
+    }
+  });
+
+  const ageHours = Math.max(
+    0,
+    (Date.now() - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60)
+  );
+  score += Math.max(0, 5 - ageHours / 12);
+
+  return {
+    ...article,
+    score,
+    matchedInterests: Array.from(new Set(matchedInterests)).slice(0, 3),
+  };
+};
+
+const tryParseStructuredAiResponse = (rawText) => {
+  const text = String(rawText || '').trim();
+  if (!text) return null;
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      answer: String(parsed.answer || '').trim(),
+      query: String(parsed.query || '').trim(),
+      suggested_url: String(parsed.suggested_url || '').trim(),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const buildFallbackAiResponse = (prompt) => {
+  const query = tokenize(prompt).slice(0, 8).join(' ');
+  return {
+    answer: 'AI provider is not configured yet. I can still suggest a search query you can queue immediately.',
+    query: query || String(prompt || '').trim(),
+    suggested_url: query || String(prompt || '').trim(),
+  };
+};
+
+const buildAiInstruction = (prompt) => {
+  return [
+    'You are FinchWire assistant.',
+    'Return only JSON with keys: answer, query, suggested_url.',
+    'answer: short helpful response.',
+    'query: concise media search query.',
+    'suggested_url: plain query text that can be passed to yt-dlp search, or a direct URL when high confidence.',
+    `User prompt: ${String(prompt || '').trim()}`,
+  ].join('\n');
+};
+
+const callGemini = async (apiKey, prompt) => {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: buildAiInstruction(prompt) }] }],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Gemini request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  return payload?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+};
+
+const callOpenAI = async (apiKey, prompt) => {
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4.1-mini',
+      input: buildAiInstruction(prompt),
+      temperature: 0.2,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`OpenAI request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  return payload?.output_text || '';
+};
+
+const callAnthropic = async (apiKey, prompt) => {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-3-5-haiku-latest',
+      max_tokens: 400,
+      temperature: 0.2,
+      messages: [{ role: 'user', content: buildAiInstruction(prompt) }],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Anthropic request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  const firstTextBlock = Array.isArray(payload?.content)
+    ? payload.content.find((item) => item?.type === 'text')
+    : null;
+  return firstTextBlock?.text || '';
+};
+
+const callGroq = async (apiKey, prompt) => {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant',
+      temperature: 0.2,
+      messages: [{ role: 'user', content: buildAiInstruction(prompt) }],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Groq request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  return payload?.choices?.[0]?.message?.content || '';
+};
+
+const requestAiResponse = async (provider, apiKey, prompt) => {
+  if (!provider || provider === 'none' || !apiKey) {
+    return buildFallbackAiResponse(prompt);
+  }
+
+  let rawText = '';
+  if (provider === 'gemini') rawText = await callGemini(apiKey, prompt);
+  else if (provider === 'openai') rawText = await callOpenAI(apiKey, prompt);
+  else if (provider === 'anthropic') rawText = await callAnthropic(apiKey, prompt);
+  else if (provider === 'groq') rawText = await callGroq(apiKey, prompt);
+  else return buildFallbackAiResponse(prompt);
+
+  const structured = tryParseStructuredAiResponse(rawText);
+  if (structured) {
+    return {
+      answer: structured.answer || 'Here is a suggestion.',
+      query: structured.query || tokenize(prompt).slice(0, 8).join(' '),
+      suggested_url: structured.suggested_url || structured.query || tokenize(prompt).slice(0, 8).join(' '),
+    };
+  }
+
+  const fallback = buildFallbackAiResponse(prompt);
+  return {
+    answer: rawText || fallback.answer,
+    query: fallback.query,
+    suggested_url: fallback.suggested_url,
+  };
+};
+
 const normalizeRelativePath = (value) => {
   if (!value) return '';
   return String(value)
@@ -357,6 +722,95 @@ app.patch('/api/settings', auth, (req, res) => {
   });
 });
 
+app.post('/api/ai/search', auth, async (req, res) => {
+  const prompt = String(req.body?.prompt || '').trim();
+  if (!prompt) {
+    return res.status(400).json({ error: 'prompt is required' });
+  }
+
+  const settings = getServerSettings();
+  const aiApiKey = db.getSetting('ai_api_key', envAiApiKey) || '';
+
+  try {
+    const aiResult = await requestAiResponse(settings.ai_provider, aiApiKey, prompt);
+    db.logAction('AI_SEARCH', {
+      status: 'success',
+      details: {
+        prompt,
+        provider: settings.ai_provider,
+        query: aiResult.query || '',
+      },
+    });
+
+    return res.json({
+      success: true,
+      provider: settings.ai_provider,
+      ...aiResult,
+    });
+  } catch (error) {
+    db.logAction('AI_SEARCH', {
+      status: 'error',
+      details: {
+        prompt,
+        provider: settings.ai_provider,
+        error: error.message,
+      },
+    });
+    return res.status(502).json({ error: `AI request failed: ${error.message}` });
+  }
+});
+
+app.get('/api/discover/news', auth, async (_req, res) => {
+  const interests = getTopInterests();
+  const topicCandidates = [...DEFAULT_DISCOVER_TOPICS, ...interests.slice(0, 6)];
+  const normalizedTopics = Array.from(
+    new Set(topicCandidates.map((topic) => normalizeText(topic)).filter(Boolean))
+  );
+  const topicFeeds = normalizedTopics
+    .slice(0, 6)
+    .map((topic) => `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-US&gl=US&ceid=US:en`);
+  const feedUrls = Array.from(new Set([...BASE_DISCOVER_FEEDS, ...topicFeeds]));
+
+  try {
+    const feedResults = await Promise.allSettled(
+      feedUrls.map(async (url) => {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Feed request failed (${response.status})`);
+        }
+        const xml = await response.text();
+        return parseFeedItems(xml);
+      })
+    );
+
+    const merged = feedResults.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
+    const scored = merged.map((article) => scoreDiscoverArticle(article, interests));
+
+    const dedupedMap = new Map();
+    scored.forEach((item) => {
+      const previous = dedupedMap.get(item.link);
+      if (!previous || item.score > previous.score) {
+        dedupedMap.set(item.link, item);
+      }
+    });
+
+    const articles = Array.from(dedupedMap.values())
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+      })
+      .slice(0, 30);
+
+    return res.json({
+      success: true,
+      interests: interests.slice(0, 10),
+      articles,
+    });
+  } catch (error) {
+    return res.status(502).json({ error: `Discover feed failed: ${error.message}` });
+  }
+});
+
 app.get('/api/downloads', auth, (req, res) => {
   const jobs = db.getAllJobs().map((job) => {
     const playbackPath = getPlaybackPathForJob(job);
@@ -384,10 +838,30 @@ app.get('/api/downloads', auth, (req, res) => {
       relative_path: playbackPath,
       safe_filename: expectedSafeFilename,
       media_url: UrlHelper.buildMediaUrl(playbackPath),
+      share_url: UrlHelper.buildMediaUrlWithToken(playbackPath, adminPassword),
       vlc_url: UrlHelper.buildVlcUrl(playbackPath),
     };
   });
   res.json(jobs);
+});
+
+app.get('/api/downloads/:id/share', auth, (req, res) => {
+  const { id } = req.params;
+  const job = db.getJob(id);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  const playbackPath = getPlaybackPathForJob(job);
+  if (!playbackPath) {
+    return res.status(404).json({ error: 'Media file not found for this job' });
+  }
+
+  return res.json({
+    success: true,
+    media_url: UrlHelper.buildMediaUrl(playbackPath),
+    share_url: UrlHelper.buildMediaUrlWithToken(playbackPath, adminPassword),
+  });
 });
 
 app.post('/api/downloads', auth, async (req, res) => {
