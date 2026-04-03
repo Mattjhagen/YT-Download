@@ -3,107 +3,103 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Media Drop</title>
-    <link rel="icon" type="image/png" href="favicon.png">
+    <title>FinchWire</title>
+    <link rel="icon" type="image/png" href="finchwire-logo.png">
     <link rel="stylesheet" href="styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body class="dark-theme">
     <div id="login-container" class="center-content">
         <div class="card login-card">
-            <h1>Media Drop</h1>
-            <p>Enter admin password to continue</p>
-            <input type="password" id="admin-password" placeholder="Password">
+            <div class="brand-mark">
+                <img src="finchwire-logo.png" alt="FinchWire logo" class="brand-icon">
+                <h1>Finch<span>Wire</span></h1>
+            </div>
+            <p>Sign in to your media dashboard</p>
+            <input type="password" id="admin-password" placeholder="Admin password">
             <button id="login-btn" class="primary-btn">Login</button>
         </div>
     </div>
 
     <div id="app-container" class="hidden">
         <nav>
-            <div class="logo">Media Drop</div>
+            <div class="logo-wrap">
+                <img src="finchwire-logo.png" alt="FinchWire logo" class="nav-logo">
+                <div class="logo">Finch<span>Wire</span></div>
+            </div>
             <div class="nav-links">
                 <a href="#" class="nav-link active" data-target="dashboard-page">Dashboard</a>
-                <a href="#" class="nav-link" data-target="files-page">File Browser</a>
+                <a href="#" class="nav-link" data-target="files-page">Library</a>
                 <a href="#" class="nav-link" data-target="settings-page">Settings</a>
             </div>
             <button id="logout-btn" class="text-btn">Logout</button>
         </nav>
 
         <main>
-            <!-- Dashboard Page -->
             <section id="dashboard-page" class="page">
                 <div class="card submit-card">
-                    <h2>Submit Media URL</h2>
-                <div class="form-group">
-                    <div class="input-stack">
-                        <input type="text" id="media-url" placeholder="Enter media URL (http/https)">
-                        <input type="text" id="custom-filename" placeholder="Custom filename (optional)">
+                    <h2>Fetch Video or Audio</h2>
+                    <div class="form-group">
+                        <div class="input-stack">
+                            <input type="text" id="media-url" placeholder="Paste a URL (YouTube, direct media link, etc.)">
+                            <input type="text" id="custom-filename" placeholder="Custom filename (optional)">
+                        </div>
                     </div>
-                </div>
-                <div class="form-row">
-                    <label class="checkbox-container">
-                        <input type="checkbox" id="is-audio">
-                        <span class="checkmark"></span>
-                        Audio only
-                    </label>
-                    <button id="submit-url-btn" class="primary-btn">Download</button>
-                </div>
+                    <div class="form-row">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="is-audio">
+                            <span class="checkmark"></span>
+                            Audio only
+                        </label>
+                        <button id="submit-url-btn" class="primary-btn">Download</button>
+                    </div>
                 </div>
 
                 <div class="jobs-container">
                     <div class="jobs-header">
                         <h3>Active Downloads</h3>
-                        <button id="refresh-jobs-btn" class="icon-btn">Refresh</button>
+                        <button id="refresh-jobs-btn" class="icon-btn" title="Refresh downloads">
+                            <i data-lucide="refresh-cw"></i>
+                        </button>
                     </div>
                     <div id="active-jobs-list" class="jobs-list">
-                        <!-- Jobs will be rendered here -->
                         <div class="empty-state">No active downloads</div>
                     </div>
                 </div>
 
                 <div class="jobs-container">
                     <h3>Recent History</h3>
-                    <div id="history-jobs-list" class="jobs-list">
-                        <!-- History will be rendered here -->
-                    </div>
+                    <div id="history-jobs-list" class="jobs-list"></div>
                 </div>
             </section>
 
-            <!-- Files Page -->
             <section id="files-page" class="page hidden">
                 <div class="card">
-                    <h2>Library</h2>
-                    <div id="files-list" class="files-list">
-                        <!-- Files will be rendered here -->
-                    </div>
+                    <h2>Media Library</h2>
+                    <div id="files-list" class="files-list"></div>
                 </div>
             </section>
 
-            <!-- Settings Page -->
             <section id="settings-page" class="page hidden">
                 <div class="card">
-                    <h2>Settings</h2>
+                    <h2>FinchWire Settings</h2>
                     <div class="settings-group">
                         <div class="setting-item">
-                            <label>Storage Path</label>
+                            <label>Storage Root</label>
                             <input type="text" id="setting-storage-path" readonly value="/srv/media-drop">
                         </div>
                         <div class="setting-item">
-                            <label>Concurrent Jobs</label>
-                            <input type="number" id="setting-max-concurrent" readonly value="2">
+                            <label>Playback Mode</label>
+                            <input type="text" readonly value="Browser-native player">
                         </div>
                     </div>
                     <hr>
-                    <div class="samba-instructions">
-                        <h3>Mac/VLC Integration</h3>
-                        <p>To access files via SMB from your Mac:</p>
-                        <code>smb://SERVER-IP/MediaDrop</code>
-                        <p>To stream directly in VLC via HTTP:</p>
-                        <code>http://SERVER-IP:8080/media/FILENAME</code>
-                    </div>
+                    <p class="settings-note">
+                        `yt.finchwire.site` and `media.p3lending.space` should both route to this same service on your T310.
+                    </p>
                 </div>
             </section>
         </main>
@@ -115,10 +111,7 @@
             <div id="player-container"></div>
             <div id="player-meta">
                 <h2 id="player-title"></h2>
-                <div class="player-actions">
-                    <a id="player-download-link" href="#" download class="primary-btn sm-btn secondary-btn">Download</a>
-                    <a id="player-vlc-link" href="#" class="primary-btn sm-btn vlc-btn">Open in VLC</a>
-                </div>
+                <p class="player-hint">Browser playback</p>
             </div>
         </div>
     </div>

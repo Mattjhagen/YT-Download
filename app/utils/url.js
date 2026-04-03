@@ -10,11 +10,31 @@ class UrlHelper {
         return base.replace(/\/$/, '');
     }
 
+    static normalizeRelativePath(filename) {
+        if (!filename) return '';
+        return String(filename)
+            .replace(/\\/g, '/')
+            .replace(/^\.?\//, '')
+            .replace(/\/{2,}/g, '/')
+            .trim();
+    }
+
+    static encodeRelativePath(relativePath) {
+        const normalized = this.normalizeRelativePath(relativePath);
+        if (!normalized) return '';
+        return normalized
+            .split('/')
+            .filter(Boolean)
+            .map((segment) => encodeURIComponent(segment))
+            .join('/');
+    }
+
     static buildMediaUrl(filename) {
         if (!filename) return '';
         const base = this.getBase();
+        const encodedPath = this.encodeRelativePath(filename);
         // Use URL object to ensure proper formatting and avoid https// issues
-        const url = new URL(`${base}/media/${encodeURIComponent(filename)}`);
+        const url = new URL(`${base}/media/${encodedPath}`);
         return url.toString();
     }
 

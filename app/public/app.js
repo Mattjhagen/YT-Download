@@ -1,9 +1,9 @@
 const App = {
     init() {
+        this.currentTab = 'dashboard-page';
         this.cacheDOM();
         this.bindEvents();
         this.checkSession();
-        this.currentTab = 'dashboard-page';
     },
 
     cacheDOM() {
@@ -16,70 +16,118 @@ const App = {
         this.customFilenameInput = document.getElementById('custom-filename');
         this.isAudioInput = document.getElementById('is-audio');
         this.submitUrlBtn = document.getElementById('submit-url-btn');
+        this.refreshJobsBtn = document.getElementById('refresh-jobs-btn');
         this.activeJobsList = document.getElementById('active-jobs-list');
         this.historyJobsList = document.getElementById('history-jobs-list');
         this.filesList = document.getElementById('files-list');
         this.navLinks = document.querySelectorAll('.nav-link');
         this.pages = document.querySelectorAll('.page');
         this.toastContainer = document.getElementById('toast-container');
-        
-        // Media Modal
+
+        // Media modal
         this.mediaModal = document.getElementById('media-modal');
         this.closeModalBtn = document.getElementById('close-modal-btn');
         this.playerContainer = document.getElementById('player-container');
         this.playerTitle = document.getElementById('player-title');
-        this.playerDownloadLink = document.getElementById('player-download-link');
-        this.playerVlcLink = document.getElementById('player-vlc-link');
     },
 
     bindEvents() {
         this.loginBtn.onclick = () => this.login();
         this.logoutBtn.onclick = () => this.logout();
         this.submitUrlBtn.onclick = () => this.submitUrl();
-        this.navLinks.forEach(link => {
-            link.onclick = (e) => this.switchTab(e);
-        });
-        this.passwordInput.onkeyup = (e) => e.key === 'Enter' && this.login();
-        this.mediaUrlInput.onkeyup = (e) => e.key === 'Enter' && this.submitUrl();
+        this.refreshJobsBtn.onclick = () => this.loadDashboard();
         this.closeModalBtn.onclick = () => this.closePlayer();
-        this.mediaModal.onclick = (e) => {
-            if (e.target === this.mediaModal) this.closePlayer();
+
+        this.navLinks.forEach((link) => {
+            link.onclick = (event) => this.switchTab(event);
+        });
+
+        this.passwordInput.onkeyup = (event) => {
+            if (event.key === 'Enter') this.login();
+        };
+
+        this.mediaUrlInput.onkeyup = (event) => {
+            if (event.key === 'Enter') this.submitUrl();
+        };
+
+        this.mediaModal.onclick = (event) => {
+            if (event.target === this.mediaModal) this.closePlayer();
         };
     },
 
+    async request(url, options = {}) {
+        const response = await fetch(url, options);
+        const text = await response.text();
+        let payload = {};
+
+        try {
+            payload = text ? JSON.parse(text) : {};
+        } catch {
+            payload = { error: text || 'Unexpected response from server' };
+        }
+
+        if (!response.ok) {
+            const message = payload.error || `Request failed (${response.status})`;
+            throw new Error(message);
+        }
+
+        return payload;
+    },
+
     async checkSession() {
-        const res = await fetch('/api/session');
-        const data = await res.json();
-        if (data.authenticated) {
-            this.showApp();
-        } else {
+        try {
+            const data = await this.request('/api/session');
+            if (data.authenticated) {
+                this.showApp();
+            } else {
+                this.showLogin();
+            }
+        } catch {
             this.showLogin();
         }
     },
 
     async login() {
-        const password = this.passwordInput.value;
-        const res = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password })
-        });
-        const data = await res.json();
-        if (data.success) {
-            this.showApp();
-        } else {
-            this.showToast('Invalid password', 'error');
+        const password = this.passwordInput.value.trim();
+        if (!password) {
+            this.showToast('Password is required', 'error');
+            return;
+        }
+
+        try {
+            const data = await this.request('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password }),
+            });
+
+            if (data.success) {
+                this.passwordInput.value = '';
+                this.showApp();
+            } else {
+                this.showToast('Invalid password', 'error');
+            }
+        } catch (error) {
+            this.showToast(error.message, 'error');
         }
     },
 
     async logout() {
-        await fetch('/api/logout', { method: 'POST' });
+        try {
+            await this.request('/api/logout', { method: 'POST' });
+        } catch {
+            // No-op; we still force local logout state.
+        }
         this.showLogin();
     },
 
     showLogin() {
         this.loginContainer.classList.remove('hidden');
         this.appContainer.classList.add('hidden');
+        if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+        }
     },
 
     showApp() {
@@ -90,135 +138,147 @@ const App = {
         if (window.lucide) lucide.createIcons();
     },
 
-    switchTab(e) {
-        e.preventDefault();
-        const target = e.target.dataset.target;
-        this.navLinks.forEach(link => link.classList.remove('active'));
-        e.target.classList.add('active');
-        this.pages.forEach(page => page.classList.add('hidden'));
+    switchTab(event) {
+        event.preventDefault();
+        const target = event.currentTarget.dataset.target;
+        if (!target) return;
+
+        this.navLinks.forEach((link) => link.classList.remove('active'));
+        event.currentTarget.classList.add('active');
+
+        this.pages.forEach((page) => page.classList.add('hidden'));
         document.getElementById(target).classList.remove('hidden');
         this.currentTab = target;
-        
+
         if (target === 'dashboard-page') this.loadDashboard();
         if (target === 'files-page') this.loadFiles();
     },
 
     async submitUrl() {
-        const url = this.mediaUrlInput.value;
-        const filename = this.customFilenameInput.value;
-        const is_audio = this.isAudioInput.checked;
-        if (!url) return this.showToast('URL is required', 'error');
+        const url = this.mediaUrlInput.value.trim();
+        const filename = this.customFilenameInput.value.trim();
+        const isAudio = this.isAudioInput.checked;
 
-        const res = await fetch('/api/downloads', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, filename, is_audio })
-        });
-        const data = await res.json();
-        if (res.ok) {
+        if (!url) {
+            this.showToast('Media URL is required', 'error');
+            return;
+        }
+
+        try {
+            await this.request('/api/downloads', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url,
+                    filename: filename || undefined,
+                    is_audio: isAudio,
+                }),
+            });
+
             this.showToast('Download started');
             this.mediaUrlInput.value = '';
             this.customFilenameInput.value = '';
             this.loadDashboard();
-        } else {
-            this.showToast(data.error, 'error');
+        } catch (error) {
+            this.showToast(error.message, 'error');
         }
     },
 
     async loadDashboard() {
-        const res = await fetch('/api/downloads');
-        const jobs = await res.json();
-        this.renderJobs(jobs);
+        try {
+            const jobs = await this.request('/api/downloads');
+            this.renderJobs(jobs);
+        } catch (error) {
+            if (String(error.message).toLowerCase().includes('unauthorized')) {
+                this.showLogin();
+                return;
+            }
+            this.showToast(error.message, 'error');
+        }
     },
 
     renderJobs(jobs) {
-        const active = jobs.filter(j => j.status === 'downloading' || j.status === 'queued');
-        const history = jobs.filter(j => j.status !== 'downloading' && j.status !== 'queued');
+        const active = jobs.filter((job) => job.status === 'downloading' || job.status === 'queued');
+        const history = jobs.filter((job) => job.status !== 'downloading' && job.status !== 'queued');
 
-        this.activeJobsList.innerHTML = active.map(j => this.renderJobItem(j)).join('') || '<div class="empty-state">No active downloads</div>';
-        this.historyJobsList.innerHTML = history.map(j => this.renderJobItem(j)).join('') || '<div class="empty-state">History is empty</div>';
-        
+        this.activeJobsList.innerHTML = active.map((job) => this.renderJobItem(job)).join('') || '<div class="empty-state">No active downloads</div>';
+        this.historyJobsList.innerHTML = history.map((job) => this.renderJobItem(job)).join('') || '<div class="empty-state">History is empty</div>';
+
         if (window.lucide) lucide.createIcons();
     },
 
     renderJobItem(job) {
+        const displayTitle = this.escapeHtml(job.filename || job.url || 'Untitled');
+        const displayMeta = this.escapeHtml(`${job.source_domain || 'unknown'} | ${new Date(job.created_at).toLocaleString()}`);
+        const mediaUrl = this.toSameOriginMediaUrl(job.media_url);
+        const encodedMediaUrl = encodeURIComponent(mediaUrl);
+        const encodedTitle = encodeURIComponent(job.filename || job.url || 'Untitled');
+        const isAudio = job.is_audio ? 'true' : 'false';
+        const statusClass = this.escapeHtml(String(job.status || '').toLowerCase());
+
         return `
-            <div class="job-item" data-id="${job.id}" 
-                 data-media-title="${job.filename || job.url}"
-                 data-media-url="${job.media_url}"
-                 data-audio-url="${job.is_audio ? job.media_url : ''}"
-                 data-vlc-url="${job.vlc_url}">
+            <div class="job-item" data-id="${job.id}">
                 <div class="job-info">
-                    <div class="job-title">${job.filename || job.url}</div>
-                    <div class="job-meta">${job.source_domain} | ${new Date(job.created_at).toLocaleString()}</div>
+                    <div class="job-title">${displayTitle}</div>
+                    <div class="job-meta">${displayMeta}</div>
+                    ${job.status === 'downloading' ? `
+                        <div class="progress-bar-container">
+                            <div class="progress-bar-fill" style="width: ${Math.round(job.progress_percent || 0)}%"></div>
+                        </div>
+                        <div class="job-percent">${Math.round(job.progress_percent || 0)}%</div>
+                    ` : ''}
                 </div>
-                ${job.status === 'downloading' ? `
-                    <div class="progress-bar-container">
-                        <div class="progress-bar-fill" style="width: ${job.progress_percent || 0}%"></div>
-                    </div>
-                    <div class="job-percent">${Math.round(job.progress_percent || 0)}%</div>
-                ` : ''}
-                <div class="status-badge status-${job.status}">${job.status}${job.is_audio ? ' (Audio)' : ''}</div>
                 <div class="job-actions">
+                    <span class="status-badge status-${statusClass}">${this.escapeHtml(String(job.status || 'unknown'))}</span>
                     ${job.status === 'completed' ? `
-                        <button onclick="App.openPlayer('${job.media_url}', ${job.is_audio}, '${job.filename || job.url}', '${job.vlc_url}')" class="primary-btn sm-btn" title="Play">
+                        <button class="primary-btn sm-btn" onclick="App.openPlayer(decodeURIComponent('${encodedMediaUrl}'), ${isAudio}, decodeURIComponent('${encodedTitle}'))" title="Play in browser">
                             <i data-lucide="play"></i> Play
                         </button>
-                        <button onclick="App.playInVlc('${job.vlc_url}')" class="primary-btn sm-btn vlc-btn" title="Open in VLC">
-                            <i data-lucide="tv"></i> VLC
-                        </button>
-                        <a href="${job.media_url}?download=true" download class="primary-btn sm-btn secondary-btn" style="text-decoration:none; display:inline-flex; align-items:center;">
-                            <i data-lucide="download"></i>
-                        </a>
                     ` : ''}
-                    ${job.status === 'failed' ? `<button onclick="App.retryJob('${job.id}')" class="primary-btn sm-btn"><i data-lucide="refresh-cw"></i> Retry</button>` : ''}
-                    <button onclick="App.deleteJob('${job.id}')" class="text-btn"><i data-lucide="trash-2"></i></button>
+                    ${job.status === 'failed' ? `
+                        <button class="icon-btn" onclick="App.retryJob('${job.id}')" title="Retry download">
+                            <i data-lucide="refresh-cw"></i>
+                        </button>
+                    ` : ''}
+                    <button class="sm-btn danger-btn" onclick="App.deleteJob('${job.id}')" title="Delete">
+                        <i data-lucide="trash-2"></i> Delete
+                    </button>
                 </div>
             </div>
         `;
     },
 
     async retryJob(id) {
-        const res = await fetch(`/api/downloads/${id}/retry`, { method: 'POST' });
-        if (res.ok) {
+        try {
+            await this.request(`/api/downloads/${id}/retry`, { method: 'POST' });
             this.showToast('Retrying download...');
             this.loadDashboard();
-        } else {
-            this.showToast('Failed to retry', 'error');
+        } catch (error) {
+            this.showToast(error.message, 'error');
         }
     },
 
-    playInVlc(vlcUrl) {
-        if (!vlcUrl) return;
-        window.location.assign(vlcUrl);
-        this.showToast('Opening in VLC...');
-    },
+    openPlayer(mediaUrl, isAudio, title) {
+        const sourceType = this.detectMimeType(mediaUrl, isAudio);
+        const safeTitle = title || 'Now Playing';
 
-    openPlayer(mediaUrl, isAudio, title, vlcUrl) {
-        this.playerTitle.innerText = title;
-        this.playerDownloadLink.href = `${mediaUrl}?download=true`;
-        this.playerVlcLink.href = vlcUrl;
-        this.playerVlcLink.onclick = (e) => {
-            e.preventDefault();
-            this.playInVlc(vlcUrl);
-        };
-
-        // Extension Hooks
-        this.mediaModal.setAttribute('data-media-title', title);
-        this.mediaModal.setAttribute('data-media-url', mediaUrl);
-        this.mediaModal.setAttribute('data-audio-url', isAudio ? mediaUrl : '');
-        this.mediaModal.setAttribute('data-vlc-url', vlcUrl);
-
-        const mediaElement = isAudio ? 'audio' : 'video';
-        this.playerContainer.innerHTML = `
-            <${mediaElement} controls playsinline preload="metadata" autoplay>
-                <source src="${mediaUrl}" type="${isAudio ? 'audio/mpeg' : 'video/mp4'}">
-                Your browser does not support the ${mediaElement} element.
-            </${mediaElement}>
-        `;
+        this.playerTitle.innerText = safeTitle;
+        this.playerContainer.innerHTML = isAudio
+            ? `
+                <audio controls autoplay preload="metadata">
+                    <source src="${mediaUrl}" type="${sourceType}">
+                    Your browser does not support audio playback.
+                </audio>
+            `
+            : `
+                <video controls playsinline autoplay preload="metadata">
+                    <source src="${mediaUrl}" type="${sourceType}">
+                    Your browser does not support video playback.
+                </video>
+            `;
 
         this.mediaModal.classList.remove('hidden');
-        document.body.style.overflow = 'hidden'; // Prevent scrolling background
+        document.body.style.overflow = 'hidden';
     },
 
     closePlayer() {
@@ -228,89 +288,152 @@ const App = {
     },
 
     async loadFiles() {
-        const res = await fetch('/api/files');
-        const files = await res.json();
-        this.filesList.innerHTML = files.map(f => `
+        try {
+            const files = await this.request('/api/files');
+            this.filesList.innerHTML = files.map((file) => this.renderFileItem(file)).join('') || '<div class="empty-state">No media files found</div>';
+            if (window.lucide) lucide.createIcons();
+        } catch (error) {
+            this.showToast(error.message, 'error');
+        }
+    },
+
+    renderFileItem(file) {
+        const mediaUrl = this.toSameOriginMediaUrl(file.url);
+        const isAudio = this.isAudioFilename(file.name);
+        const encodedUrl = encodeURIComponent(mediaUrl);
+        const encodedTitle = encodeURIComponent(file.name || 'Media');
+        const encodedPath = encodeURIComponent(file.relative_path || file.name);
+
+        return `
             <div class="file-item">
                 <div class="job-info">
-                    <div class="job-title">${f.name}</div>
-                    <div class="job-meta">${(f.size / 1024 / 1024).toFixed(2)} MB | ${new Date(f.mtime).toLocaleString()}</div>
+                    <div class="job-title">${this.escapeHtml(file.name)}</div>
+                    <div class="job-meta">${(file.size / 1024 / 1024).toFixed(2)} MB | ${new Date(file.mtime).toLocaleString()}</div>
                 </div>
                 <div class="file-actions">
-                    <button onclick="App.openPlayer('${f.url}', ${f.name.endsWith('.m4a') || f.name.endsWith('.mp3')}, '${f.name}', '${f.vlc_url}')" class="primary-btn sm-btn" title="Play">
+                    <button class="primary-btn sm-btn" onclick="App.openPlayer(decodeURIComponent('${encodedUrl}'), ${isAudio ? 'true' : 'false'}, decodeURIComponent('${encodedTitle}'))" title="Play in browser">
                         <i data-lucide="play"></i> Play
                     </button>
-                    <button onclick="App.playInVlc('${f.vlc_url}')" class="primary-btn sm-btn vlc-btn" title="Play in VLC">
-                        <i data-lucide="tv"></i> VLC
-                    </button>
-                    <button onclick="App.copyToClipboard('${f.url}')" class="icon-btn" title="Copy Streaming URL">
-                        <i data-lucide="link"></i>
-                    </button>
-                    <button onclick="App.deleteFile('${f.name}')" class="icon-btn" title="Delete">
-                        <i data-lucide="trash-2"></i>
+                    <button class="sm-btn danger-btn" onclick="App.deleteFile(decodeURIComponent('${encodedPath}'))" title="Delete file">
+                        <i data-lucide="trash-2"></i> Delete
                     </button>
                 </div>
             </div>
-        `).join('') || '<div class="empty-state">No files found</div>';
-        
-        if (window.lucide) lucide.createIcons();
+        `;
     },
 
     async deleteJob(id) {
-        if (!confirm('Are you sure you want to delete this job?')) return;
-        await fetch(`/api/downloads/${id}`, { method: 'DELETE' });
-        this.loadDashboard();
+        const shouldDelete = window.confirm('Delete this item from history and remove its media file?');
+        if (!shouldDelete) return;
+
+        try {
+            await this.request(`/api/downloads/${id}`, { method: 'DELETE' });
+            this.showToast('Deleted');
+            this.loadDashboard();
+            if (this.currentTab === 'files-page') this.loadFiles();
+        } catch (error) {
+            this.showToast(error.message, 'error');
+        }
     },
 
-    async deleteFile(name) {
-      // For MVP, we can reuse DELETE /api/downloads/:id if we track file to job, 
-      // but simpler to add a dedicated file delete if needed.
-      // Re-using job delete logic for now or implement direct delete.
-      this.showToast('Deleting files is currently bound to job history deletion.');
+    async deleteFile(relativePath) {
+        const shouldDelete = window.confirm('Delete this media file from server storage?');
+        if (!shouldDelete) return;
+
+        try {
+            await this.request('/api/files', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ relative_path: relativePath }),
+            });
+
+            this.showToast('File deleted');
+            this.loadFiles();
+            if (this.currentTab === 'dashboard-page') this.loadDashboard();
+        } catch (error) {
+            this.showToast(error.message, 'error');
+        }
     },
 
     startSSE() {
         if (this.eventSource) this.eventSource.close();
         this.eventSource = new EventSource('/api/events');
-        this.eventSource.onmessage = (e) => {
-            const payload = JSON.parse(e.data);
+
+        this.eventSource.onmessage = (event) => {
+            const payload = JSON.parse(event.data);
 
             if (payload.type === 'refresh') {
-                // A job changed status — do a full dashboard reload
                 if (this.currentTab === 'dashboard-page') this.loadDashboard();
+                if (this.currentTab === 'files-page') this.loadFiles();
                 return;
             }
 
             if (payload.type === 'progress' && Array.isArray(payload.jobs)) {
-                payload.jobs.forEach(job => {
+                payload.jobs.forEach((job) => {
                     const item = document.querySelector(`.job-item[data-id="${job.id}"]`);
-                    if (item) {
-                        const bar = item.querySelector('.progress-bar-fill');
-                        const text = item.querySelector('.job-percent');
-                        if (bar) bar.style.width = `${job.progress_percent}%`;
-                        if (text) text.innerText = `${Math.round(job.progress_percent)}%`;
-                    }
+                    if (!item) return;
+                    const bar = item.querySelector('.progress-bar-fill');
+                    const text = item.querySelector('.job-percent');
+                    if (bar) bar.style.width = `${job.progress_percent}%`;
+                    if (text) text.innerText = `${Math.round(job.progress_percent)}%`;
                 });
             }
         };
+
         this.eventSource.onerror = () => {
-            // Reconnect after a short delay on error
             setTimeout(() => this.startSSE(), 3000);
         };
     },
 
-    showToast(msg, type = 'success') {
-        const toast = document.createElement('div');
-        toast.className = `toast ${type}`;
-        toast.innerText = msg;
-        this.toastContainer.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
+    toSameOriginMediaUrl(rawUrl) {
+        if (!rawUrl) return '';
+        try {
+            const parsed = new URL(rawUrl, window.location.origin);
+            return `${window.location.origin}${parsed.pathname}${parsed.search}`;
+        } catch {
+            return rawUrl;
+        }
     },
 
-    copyToClipboard(text) {
-        navigator.clipboard.writeText(text);
-        this.showToast('Copied to clipboard');
-    }
+    detectMimeType(mediaUrl, isAudio) {
+        const extension = (mediaUrl.split('?')[0].split('.').pop() || '').toLowerCase();
+        const mimeMap = {
+            mp4: 'video/mp4',
+            webm: 'video/webm',
+            mkv: 'video/x-matroska',
+            mov: 'video/quicktime',
+            mp3: 'audio/mpeg',
+            m4a: 'audio/mp4',
+            aac: 'audio/aac',
+            ogg: 'audio/ogg',
+            opus: 'audio/ogg; codecs=opus',
+        };
+
+        if (mimeMap[extension]) return mimeMap[extension];
+        return isAudio ? 'audio/mpeg' : 'video/mp4';
+    },
+
+    isAudioFilename(filename) {
+        const lowered = String(filename || '').toLowerCase();
+        return lowered.endsWith('.mp3') || lowered.endsWith('.m4a') || lowered.endsWith('.aac') || lowered.endsWith('.ogg') || lowered.endsWith('.opus');
+    },
+
+    escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    },
+
+    showToast(message, type = 'success') {
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.innerText = message;
+        this.toastContainer.appendChild(toast);
+        setTimeout(() => toast.remove(), 2800);
+    },
 };
 
 window.onload = () => App.init();

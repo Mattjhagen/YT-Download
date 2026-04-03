@@ -195,6 +195,74 @@ class Downloader {
     });
   }
 
+  async resolveSearchQuery(input) {
+    const value = String(input || '').trim();
+    if (!value) {
+      throw new Error('Search query is empty');
+    }
+
+    if (/^https?:\/\//i.test(value)) {
+      return value;
+    }
+
+    const hasYtDlp = await this.checkYtDlp();
+    if (!hasYtDlp) {
+      throw new Error('yt-dlp is required for search queries. Paste a direct URL instead.');
+    }
+
+    return new Promise((resolve, reject) => {
+      const binary = this.getToolPath('yt-dlp');
+      const args = [
+        '--skip-download',
+        '--no-warnings',
+        '--default-search',
+        'ytsearch1',
+        '--print',
+        'webpage_url',
+        value
+      ];
+
+      const proc = spawn(binary, args);
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      proc.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on('error', (err) => reject(err));
+
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          return reject(new Error(stderr.trim() || `Search failed (code ${code})`));
+        }
+
+        const firstLine = stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .find(Boolean);
+
+        if (!firstLine) {
+          return reject(new Error('No search results found'));
+        }
+
+        if (/^https?:\/\//i.test(firstLine)) {
+          return resolve(firstLine);
+        }
+
+        if (/^[a-zA-Z0-9_-]{11}$/.test(firstLine)) {
+          return resolve(`https://www.youtube.com/watch?v=${firstLine}`);
+        }
+
+        return reject(new Error('Could not resolve search result URL'));
+      });
+    });
+  }
+
   async startDownload(jobId) {
     const job = this.db.getJob(jobId);
     if (!job) return;
@@ -521,6 +589,18 @@ class Downloader {
       update.width = info.width;
       update.height = info.height;
       update.mime_type = info.ext ? `media/${info.ext}` : null;
+
+      // Keep user-facing title clean even when initial metadata lookup failed.
+      // Do not overwrite explicit custom names unless they look like fallback IDs.
+      const currentName = String(job.filename || '').trim();
+      const looksLikeFallback =
+        !currentName ||
+        /^youtube_[a-zA-Z0-9_-]{11}$/i.test(currentName) ||
+        /^[a-zA-Z0-9_-]{10,14}$/.test(currentName);
+
+      if (looksLikeFallback && typeof info.title === 'string' && info.title.trim()) {
+        update.filename = info.title.trim();
+      }
     } catch (e) {
       console.warn(`[Downloader] Metadata extraction failed: ${e.message}`);
     }

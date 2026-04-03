@@ -26,15 +26,119 @@ app.set('trust proxy', 1); // For Cloudflare/proxies to get real IP
 
 const limiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  limit: 100, // Allow 100 requests per hour
+  limit: parseInt(process.env.MEDIA_DROP_RATE_LIMIT_PER_HOUR || '1200', 10),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   validate: { xForwardedForHeader: false },
+  skip: (req) => {
+    const requestPath = req.path || '';
+    if (req.method === 'GET' && (
+      requestPath === '/health' ||
+      requestPath === '/api/session' ||
+      requestPath === '/api/downloads' ||
+      requestPath === '/api/events' ||
+      requestPath.startsWith('/media/')
+    )) {
+      return true;
+    }
+    return false;
+  },
   message: { error: 'Too many requests, please try again later.' }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(limiter);
+
+const getStorageRoot = () => process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+const getLibraryRoot = () => path.join(getStorageRoot(), 'library');
+
+const normalizeRelativePath = (value) => {
+  if (!value) return '';
+  return String(value)
+    .replace(/\\/g, '/')
+    .replace(/^\.?\//, '')
+    .replace(/\/{2,}/g, '/')
+    .trim();
+};
+
+const toSafeRelativePath = (absolutePath) => {
+  const libraryRoot = getLibraryRoot();
+  const relative = path.relative(libraryRoot, absolutePath);
+  if (relative.startsWith('..')) return '';
+  return normalizeRelativePath(relative);
+};
+
+const resolveMediaPath = (requestedPath) => {
+  const libraryRoot = getLibraryRoot();
+  const normalized = normalizeRelativePath(decodeURIComponent(String(requestedPath || '')));
+  if (!normalized) return null;
+
+  const candidate = path.resolve(libraryRoot, normalized);
+  if (!candidate.startsWith(libraryRoot + path.sep) && candidate !== libraryRoot) {
+    return null;
+  }
+
+  if (fs.existsSync(candidate)) {
+    return {
+      absolutePath: candidate,
+      relativePath: toSafeRelativePath(candidate)
+    };
+  }
+
+  const parsed = path.parse(candidate);
+  if (parsed.ext) {
+    return null;
+  }
+
+  if (!fs.existsSync(parsed.dir)) {
+    return null;
+  }
+
+  try {
+    const matches = fs.readdirSync(parsed.dir)
+      .filter((entry) => {
+        const entryPath = path.join(parsed.dir, entry);
+        if (!fs.existsSync(entryPath)) return false;
+        const stat = fs.statSync(entryPath);
+        if (!stat.isFile()) return false;
+        return path.parse(entry).name === parsed.name;
+      })
+      .sort();
+
+    if (matches.length === 0) {
+      return null;
+    }
+
+    const resolvedAbsolute = path.join(parsed.dir, matches[0]);
+    return {
+      absolutePath: resolvedAbsolute,
+      relativePath: toSafeRelativePath(resolvedAbsolute)
+    };
+  } catch {
+    return null;
+  }
+};
+
+const getPlaybackPathForJob = (job) => {
+  const candidates = [
+    normalizeRelativePath(job.relative_path),
+    normalizeRelativePath(job.safe_filename),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const resolved = resolveMediaPath(candidate);
+    if (resolved?.relativePath) {
+      return resolved.relativePath;
+    }
+  }
+
+  if (job.absolute_path && fs.existsSync(job.absolute_path)) {
+    const relativePath = toSafeRelativePath(job.absolute_path);
+    if (relativePath) return relativePath;
+  }
+
+  return candidates[0] || '';
+};
 
 const isValidAuthToken = (value) => {
   return typeof value === 'string' && value.length > 0 && value === adminPassword;
@@ -105,11 +209,35 @@ app.get('/api/session', (req, res) => {
 });
 
 app.get('/api/downloads', auth, (req, res) => {
-  const jobs = db.getAllJobs().map(job => ({
-    ...job,
-    media_url: UrlHelper.buildMediaUrl(job.relative_path || job.safe_filename),
-    vlc_url: UrlHelper.buildVlcUrl(job.relative_path || job.safe_filename)
-  }));
+  const jobs = db.getAllJobs().map((job) => {
+    const playbackPath = getPlaybackPathForJob(job);
+    const normalizedRelative = normalizeRelativePath(job.relative_path);
+    const expectedSafeFilename = playbackPath ? path.basename(playbackPath) : job.safe_filename;
+
+    // Opportunistically heal stale DB rows (older downloads without extension/path corrections).
+    if (
+      playbackPath &&
+      (
+        normalizedRelative !== playbackPath ||
+        normalizeRelativePath(job.safe_filename) !== expectedSafeFilename ||
+        (job.absolute_path && !normalizeRelativePath(job.absolute_path).endsWith(playbackPath))
+      )
+    ) {
+      db.updateJob(job.id, {
+        relative_path: playbackPath,
+        safe_filename: expectedSafeFilename,
+        absolute_path: path.join(getLibraryRoot(), playbackPath),
+      });
+    }
+
+    return {
+      ...job,
+      relative_path: playbackPath,
+      safe_filename: expectedSafeFilename,
+      media_url: UrlHelper.buildMediaUrl(playbackPath),
+      vlc_url: UrlHelper.buildVlcUrl(playbackPath),
+    };
+  });
   res.json(jobs);
 });
 
@@ -119,22 +247,35 @@ app.post('/api/downloads', auth, async (req, res) => {
   const userAgent = req.headers['user-agent'];
 
   try {
+    const requestedInput = String(url || '').trim();
+    if (!requestedInput) {
+      throw new Error('URL or search query is required');
+    }
+
+    const resolvedUrl = await downloader.resolveSearchQuery(requestedInput);
+
     // Validate subfolder to prevent path traversal
     let safeSubfolder = '';
     if (subfolder) {
       safeSubfolder = sanitizeFilename(subfolder.replace(/\//g, '_').replace(/\\/g, '_'));
     }
 
-    const parsedUrl = await downloader.validateURL(url);
+    const parsedUrl = await downloader.validateURL(resolvedUrl);
     const domain = parsedUrl.hostname;
 
     // Log intent
-    db.logAction('DOWNLOAD_SUBMIT', { url, ip, user_agent: userAgent, status: 'pending' });
+    db.logAction('DOWNLOAD_SUBMIT', {
+      url: resolvedUrl,
+      ip,
+      user_agent: userAgent,
+      status: 'pending',
+      details: requestedInput !== resolvedUrl ? { input: requestedInput } : undefined
+    });
 
     // Fetch metadata if no filename provided
     let finalTitle = filename;
     if (!finalTitle) {
-        finalTitle = await downloader.getMetadata(url);
+        finalTitle = await downloader.getMetadata(resolvedUrl);
     }
 
     // Determine filename
@@ -152,8 +293,8 @@ app.post('/api/downloads', auth, async (req, res) => {
 
     const job = db.createJob({
       id,
-      url,
-      original_url: url,
+      url: resolvedUrl,
+      original_url: requestedInput,
       filename: finalFilename,
       safe_filename: safeName,
       relative_path: relativePath,
@@ -291,24 +432,27 @@ const MIME_TYPES = {
 
 // Media Streaming with Range support — supports subfolders via wildcard
 app.get('/media/*', mediaAuth, (req, res) => {
-  const filename = req.params[0];
-  const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
-  const libraryRoot = path.join(storageRoot, 'library');
-  const filePath = path.resolve(libraryRoot, filename);
+  const requestedPath = req.params[0];
+  const resolved = resolveMediaPath(requestedPath);
+  const libraryRoot = getLibraryRoot();
 
-  // Prevent path traversal
-  if (!filePath.startsWith(libraryRoot + path.sep) && filePath !== libraryRoot) {
-    return res.status(403).send('Forbidden');
+  if (!resolved) {
+    return res.status(404).send('File not found');
   }
+
+  const filePath = resolved.absolutePath;
+  const relativePath = resolved.relativePath;
 
   if (fs.existsSync(filePath)) {
     const stats = fs.statSync(filePath);
-    const ext = path.extname(filename).toLowerCase();
+    const ext = path.extname(relativePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
     
     // View Tracking (debounced)
     const debounceHours = parseInt(process.env.MEDIA_VIEW_DEBOUNCE_HOURS, 10) || 6;
-    const job = db.getJobByFilename(filename);
+    const job =
+      db.getJobByFilename(relativePath) ||
+      db.getJobByFilename(path.basename(relativePath));
     if (job) {
         db.updateView(job.id, debounceHours);
     }
@@ -335,7 +479,9 @@ app.get('/media/*', mediaAuth, (req, res) => {
         'Content-Length': stats.size,
         'Content-Type': contentType,
         'Accept-Ranges': 'bytes',
-        'Content-Disposition': download ? `attachment; filename="${encodeURIComponent(filename)}"` : 'inline'
+        'Content-Disposition': download
+          ? `attachment; filename="${encodeURIComponent(path.basename(relativePath))}"`
+          : 'inline'
       };
       res.writeHead(200, head);
       fs.createReadStream(filePath).pipe(res);
@@ -353,22 +499,68 @@ app.get('/api/files', auth, (req, res) => {
     return res.json([]);
   }
 
-  const files = fs.readdirSync(libraryDir)
-    .filter(file => !file.startsWith('.'))
-    .map(file => {
-    const filePath = path.join(libraryDir, file);
-    const stats = fs.statSync(filePath);
-    return {
-      name: file,
-      size: stats.size,
-      mtime: stats.mtime,
-      path: filePath,
-      url: UrlHelper.buildMediaUrl(file),
-      vlc_url: UrlHelper.buildVlcUrl(file)
-    };
-  });
+  const files = fs.readdirSync(libraryDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((file) => {
+      if (!file || file.startsWith('.') || file.startsWith('._')) return false;
+      const ext = path.extname(file).toLowerCase();
+      return Boolean(MIME_TYPES[ext]);
+    })
+    .map((file) => {
+      const relativePath = normalizeRelativePath(file);
+      const filePath = path.join(libraryDir, relativePath);
+      const stats = fs.statSync(filePath);
+      return {
+        name: file,
+        size: stats.size,
+        mtime: stats.mtime,
+        relative_path: relativePath,
+        url: UrlHelper.buildMediaUrl(relativePath)
+      };
+    })
+    .sort((a, b) => new Date(b.mtime).getTime() - new Date(a.mtime).getTime());
   
   res.json(files);
+});
+
+app.delete('/api/files', auth, (req, res) => {
+  const relativePath = normalizeRelativePath(req.body?.relative_path || req.body?.name);
+  if (!relativePath) {
+    return res.status(400).json({ error: 'relative_path is required' });
+  }
+
+  const resolved = resolveMediaPath(relativePath);
+  if (!resolved) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  try {
+    fs.unlinkSync(resolved.absolutePath);
+  } catch (error) {
+    return res.status(500).json({ error: `Failed to delete file: ${error.message}` });
+  }
+
+  const normalizedTarget = normalizeRelativePath(resolved.relativePath);
+  const targetBasename = path.basename(normalizedTarget);
+  const matchingJobs = db.getAllJobs().filter((job) => {
+    const jobRelative = normalizeRelativePath(job.relative_path);
+    const jobSafe = normalizeRelativePath(job.safe_filename);
+    const jobAbsoluteRelative = toSafeRelativePath(job.absolute_path || '');
+    return jobRelative === normalizedTarget || jobSafe === targetBasename || jobAbsoluteRelative === normalizedTarget;
+  });
+
+  matchingJobs.forEach((job) => db.deleteJob(job.id));
+
+  db.logAction('FILE_DELETE', {
+    status: 'success',
+    details: {
+      relative_path: normalizedTarget,
+      removed_jobs: matchingJobs.map((job) => job.id),
+    },
+  });
+
+  return res.json({ success: true });
 });
 
 // Periodic Cleanup Job
@@ -416,12 +608,12 @@ setTimeout(runCleanup, 60 * 1000);
 
 app.listen(port, bindHost, () => {
   console.log('---------------------------------------------------------');
-  console.log(`🚀 Media Drop server starting...`);
+  console.log(`🚀 FinchWire server starting...`);
   console.log(`📍 Local Address: http://${bindHost}:${port}`);
   console.log(`📂 Storage Root:  ${process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop'}`);
   console.log(`🛡️  Admin Auth:    ENABLED`);
   console.log(`🎞️  Public Media:  ${allowPublicMedia ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`🔥 Rate Limiting:  ENABLED (100/hr)`);
+  console.log(`🔥 Rate Limiting:  ENABLED (${process.env.MEDIA_DROP_RATE_LIMIT_PER_HOUR || '1200'}/hr for non-streaming endpoints)`);
   console.log('---------------------------------------------------------');
   
   // Log tool versions for debugging
