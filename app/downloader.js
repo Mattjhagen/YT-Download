@@ -4,6 +4,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const URL = require('url').URL;
+const { getStorageRoot } = require('./storage');
 
 const PRIVATE_IP_RANGES = [
   /^127\./,
@@ -143,7 +144,7 @@ class Downloader {
     
     if (isYouTube && await this.checkYtDlp()) {
       return new Promise((resolve) => {
-        const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+        const storageRoot = getStorageRoot();
         const cookiesPath = path.join(storageRoot, 'cookies.txt');
         const args = [
           '--get-title', 
@@ -328,7 +329,7 @@ class Downloader {
   }
 
   async downloadYtDlp(job) {
-    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const storageRoot = getStorageRoot();
     const finalDir = path.join(storageRoot, 'library');
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
@@ -440,7 +441,7 @@ class Downloader {
   }
 
   async downloadAria2(job) {
-    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const storageRoot = getStorageRoot();
     const tmpDir = path.join(storageRoot, 'tmp');
     const finalDir = path.join(storageRoot, 'library');
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
@@ -477,7 +478,7 @@ class Downloader {
   }
 
   async downloadNative(job) {
-    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const storageRoot = getStorageRoot();
     const tmpDir = path.join(storageRoot, 'tmp');
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 
@@ -576,7 +577,7 @@ class Downloader {
 
     try {
       const binary = this.getToolPath('yt-dlp');
-      const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+      const storageRoot = getStorageRoot();
       const cookiesPath = path.join(storageRoot, 'cookies.txt');
       const args = ['--print-json', '--skip-download', '--js-runtime', 'node', '--extractor-args', 'youtube:player_client=ios,tv,mweb,web', job.url];
       if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);

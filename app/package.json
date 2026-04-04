@@ -7,6 +7,9 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
+  "engines": {
+    "node": ">=18 <25"
+  },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
     "cookie-parser": "^1.4.6",

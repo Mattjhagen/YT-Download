@@ -1,10 +1,11 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { getDbPath } = require('./storage');
 
 class DBManager {
   constructor() {
-    const dbPath = process.env.MEDIA_DROP_DB_PATH || '/srv/media-drop/db/media-drop.sqlite';
+    const dbPath = getDbPath();
     const dbDir = path.dirname(dbPath);
     
     // Ensure DB directory exists

@@ -7,6 +7,7 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const DBManager = require('./db');
 const { Downloader, sanitizeFilename } = require('./downloader');
+const { getStorageRoot } = require('./storage');
 const UrlHelper = require('./utils/url');
 
 const app = express();
@@ -79,7 +80,6 @@ const limiter = rateLimit({
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(limiter);
 
-const getStorageRoot = () => process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
 const getLibraryRoot = () => path.join(getStorageRoot(), 'library');
 const getRequestIp = (req) => req.headers['cf-connecting-ip'] || req.ip;
 const getRequestUserAgent = (req) => req.headers['user-agent'];
@@ -1373,7 +1373,7 @@ app.post('/api/downloads', auth, async (req, res) => {
     const safeName = sanitizeFilename(finalFilename);
     const id = uuidv4();
 
-    const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+    const storageRoot = getStorageRoot();
     const relativePath = safeSubfolder ? path.join(safeSubfolder, safeName) : safeName;
     const absolutePath = path.join(storageRoot, 'library', relativePath);
 
@@ -1404,7 +1404,7 @@ app.get('/health', (req, res) => {
         status: 'ok', 
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        storage: process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop'
+        storage: getStorageRoot()
     });
 });
 
@@ -1589,7 +1589,7 @@ app.get('/media/*', mediaAuth, (req, res) => {
 });
 
 app.get('/api/files', auth, (req, res) => {
-  const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
+  const storageRoot = getStorageRoot();
   const libraryDir = path.join(storageRoot, 'library');
   
   if (!fs.existsSync(libraryDir)) {
@@ -1707,7 +1707,7 @@ app.listen(port, bindHost, () => {
   console.log('---------------------------------------------------------');
   console.log(`🚀 FinchWire server starting...`);
   console.log(`📍 Local Address: http://${bindHost}:${port}`);
-  console.log(`📂 Storage Root:  ${process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop'}`);
+  console.log(`📂 Storage Root:  ${getStorageRoot()}`);
   console.log(`🛡️  Admin Auth:    ENABLED`);
   console.log(`🎞️  Public Media:  ${allowPublicMedia ? 'ENABLED' : 'DISABLED'}`);
   console.log(`🔥 Rate Limiting:  ENABLED (${process.env.MEDIA_DROP_RATE_LIMIT_PER_HOUR || '1200'}/hr for non-streaming endpoints)`);
@@ -1716,14 +1716,14 @@ app.listen(port, bindHost, () => {
   // Log tool versions for debugging
   const { execSync } = require('child_process');
   try {
-    const aria2Version = execSync('/usr/bin/aria2c --version | head -n 1').toString().trim();
+    const aria2Version = execSync(`${downloader.getToolPath('aria2c')} --version | head -n 1`).toString().trim();
     console.log(`[System] ${aria2Version}`);
-  } catch (e) { console.error('[System] aria2c not found at /usr/bin/aria2c'); }
+  } catch (e) { console.error(`[System] aria2c not found at ${downloader.getToolPath('aria2c')}`); }
   
   try {
-    const ytdlVersion = execSync('/usr/local/bin/yt-dlp --version').toString().trim();
+    const ytdlVersion = execSync(`${downloader.getToolPath('yt-dlp')} --version`).toString().trim();
     console.log(`[System] yt-dlp version: ${ytdlVersion}`);
-  } catch (e) { console.error('[System] yt-dlp not found at /usr/local/bin/yt-dlp'); }
+  } catch (e) { console.error(`[System] yt-dlp not found at ${downloader.getToolPath('yt-dlp')}`); }
 
   // Resume interrupted downloads on startup
   const interruptedJobs = db.getAllJobs().filter(j => j.status === 'downloading' || j.status === 'queued');
