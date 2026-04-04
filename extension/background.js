@@ -33,13 +33,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleRemoteDownload(videoUrl, title, sendResponse) {
     try {
-        const { serverUrl, serverPassword } = await chrome.storage.sync.get(['serverUrl', 'serverPassword']);
+        console.log('🐦 FinchWire Background: Starting remote download request...');
+        
+        // 🔐 Robust Storage Lookup (Check Sync, then Local fallback)
+        let syncData = await chrome.storage.sync.get(['serverUrl', 'serverPassword']);
+        let localData = await chrome.storage.local.get(['serverUrl', 'serverPassword']);
+        
+        let serverUrl = syncData.serverUrl || localData.serverUrl;
+        let serverPassword = syncData.serverPassword || localData.serverPassword;
         
         if (!serverUrl || !serverPassword) {
-            console.error('FinchWire: Server URL or Password not set in options.');
+            console.error('FinchWire: Configuration missing in storage (Sync or Local). URL:', !!serverUrl, 'Password:', !!serverPassword);
             sendResponse({ success: false, error: 'Configuration missing' });
             return;
         }
+
+        // Strip trailing slash if present
+        serverUrl = serverUrl.replace(/\/+$/, "");
 
         const response = await fetch(`${serverUrl}/api/downloads`, {
             method: 'POST',
