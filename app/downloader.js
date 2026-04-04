@@ -150,8 +150,8 @@ class Downloader {
           '--skip-download', 
           '--no-warnings',
           '--js-runtime', 'node',
-          '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv,web',
-          '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          '--extractor-args', 'youtube:player_client=ios,tv,mweb,web',
+          '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
           '--add-header', 'Accept-Language:en-US,en;q=0.9',
           '--add-header', 'Referer:https://www.youtube.com/'
         ];
@@ -176,16 +176,25 @@ class Downloader {
       });
     }
 
+    // 🕵️ Generic HTML Title Scraper as a fallback
     return new Promise((resolve) => {
       try {
+          const timeout = 5000;
           const protocol = url.startsWith('https') ? https : http;
-          const req = protocol.request(url, { method: 'HEAD' }, (res) => {
-            const disposition = res.headers['content-disposition'];
-            if (disposition && disposition.includes('filename=')) {
-              const match = disposition.match(/filename="?([^";]+)"?/);
-              if (match) return resolve(match[1]);
+          const req = protocol.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout }, (res) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                return this.getMetadata(new URL(res.headers.location, url).href).then(resolve);
             }
-            resolve(path.basename(parsed.pathname) || 'download');
+            let html = '';
+            res.on('data', (d) => {
+                html += d;
+                if (html.length > 50000) res.destroy(); // Don't download entire page
+            });
+            res.on('close', () => {
+                const match = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+                if (match) return resolve(match[1].trim());
+                resolve(path.basename(parsed.pathname) || 'download');
+            });
           });
           req.on('error', () => resolve(path.basename(parsed.pathname) || 'download'));
           req.end();
@@ -219,6 +228,8 @@ class Downloader {
         'ytsearch1',
         '--print',
         'webpage_url',
+        '--js-runtime', 'node',
+        '--extractor-args', 'youtube:player_client=ios,tv,mweb,web',
         value
       ];
 
@@ -336,8 +347,8 @@ class Downloader {
       '--progress',
       '--progress-template', '{"percent":"%(progress._percent_str)s"}',
       '--js-runtime', 'node',
-      '--extractor-args', 'youtube:player-client=web_embedded,mweb,tv,web,ios',
-      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      '--extractor-args', 'youtube:player_client=ios,tv,mweb,web',
+      '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
       '--add-header', 'Accept-Language:en-US,en;q=0.9',
       '--add-header', 'Referer:https://www.youtube.com/',
       '--ffmpeg-location', ffmpegPath
@@ -363,8 +374,6 @@ class Downloader {
     return new Promise((resolve, reject) => {
       let stderrData = '';
 
-      // CRITICAL: Must consume stdout — yt-dlp writes progress JSON here.
-      // Without this listener the pipe buffer fills (64KB) and yt-dlp blocks forever.
       child.stdout.on('data', (data) => {
         const lines = data.toString().split('\n');
         for (const line of lines) {
@@ -379,12 +388,10 @@ class Downloader {
               }
             }
           } catch (e) {
-            // Non-JSON line from yt-dlp, ignore
           }
         }
       });
 
-      // Capture stderr for error reporting and logging
       child.stderr.on('data', (data) => {
         const msg = data.toString();
         stderrData += msg;
@@ -399,8 +406,6 @@ class Downloader {
       child.on('close', async (code) => {
         this.activeDownloads.delete(job.id);
         if (code === 0) {
-          // yt-dlp appends the real extension (e.g. .mp4) to the output path.
-          // Search for the actual file if the bare name doesn't exist.
           let finalPath = path.join(finalDir, job.safe_filename);
           if (!fs.existsSync(finalPath)) {
             try {
@@ -422,12 +427,9 @@ class Downloader {
           resolve();
         } else {
           let errorMsg = `yt-dlp failed (code ${code})`;
-          if (stderrData.includes('Sign in to confirm') || stderrData.includes('not a bot') || stderrData.includes('confirm you’re not a bot')) {
-            errorMsg = 'YouTube Bot Check: Please upload cookies.txt (see README)';
-          } else if (stderrData.includes('Video unavailable')) {
-            errorMsg = 'Video unavailable or private';
+          if (stderrData.includes('Sign in to confirm') || stderrData.includes('not a bot')) {
+            errorMsg = 'YouTube Bot Check: Please upload fresh cookies.txt';
           } else if (stderrData) {
-            // Extract the last useful line from stderr
             const lines = stderrData.split('\n').filter(l => l.includes('ERROR:'));
             if (lines.length > 0) errorMsg = lines[lines.length - 1].replace('ERROR: ', '').trim();
           }
@@ -560,7 +562,6 @@ class Downloader {
 
   async updateMetadataAfterDownload(job, finalPath) {
     const stats = fs.statSync(finalPath);
-    // Use the actual filename yt-dlp wrote (may differ from safe_filename by extension)
     const actualFilename = path.basename(finalPath);
     const actualRelativePath = job.relative_path
       ? path.join(path.dirname(job.relative_path), actualFilename)
@@ -577,7 +578,7 @@ class Downloader {
       const binary = this.getToolPath('yt-dlp');
       const storageRoot = process.env.MEDIA_DROP_STORAGE_ROOT || '/srv/media-drop';
       const cookiesPath = path.join(storageRoot, 'cookies.txt');
-      const args = ['--print-json', '--skip-download', '--js-runtime', 'node', job.url];
+      const args = ['--print-json', '--skip-download', '--js-runtime', 'node', '--extractor-args', 'youtube:player_client=ios,tv,mweb,web', job.url];
       if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
       
       const proc = spawn(binary, args);
@@ -590,8 +591,6 @@ class Downloader {
       update.height = info.height;
       update.mime_type = info.ext ? `media/${info.ext}` : null;
 
-      // Keep user-facing title clean even when initial metadata lookup failed.
-      // Do not overwrite explicit custom names unless they look like fallback IDs.
       const currentName = String(job.filename || '').trim();
       const looksLikeFallback =
         !currentName ||

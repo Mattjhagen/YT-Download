@@ -18,8 +18,17 @@ const envAiProvider = process.env.MEDIA_DROP_AI_PROVIDER || 'none';
 const envTtsProvider = process.env.MEDIA_DROP_TTS_PROVIDER || 'none';
 const envAiApiKey = process.env.MEDIA_DROP_AI_API_KEY || '';
 const envTtsApiKey = process.env.MEDIA_DROP_TTS_API_KEY || '';
-const ALLOWED_AI_PROVIDERS = new Set(['none', 'gemini', 'openai', 'anthropic', 'groq']);
+const envWeatherProvider = process.env.MEDIA_DROP_WEATHER_PROVIDER || 'open_meteo';
+const envWeatherApiKey = process.env.MEDIA_DROP_WEATHER_API_KEY || '';
+const envWeatherLocation = process.env.MEDIA_DROP_WEATHER_LOCATION || 'Omaha, NE';
+const envWeatherLat = process.env.MEDIA_DROP_WEATHER_LAT || '41.2565';
+const envWeatherLon = process.env.MEDIA_DROP_WEATHER_LON || '-95.9345';
+const envMarketProvider = process.env.MEDIA_DROP_MARKET_PROVIDER || 'coingecko_yahoo';
+const envMarketApiKey = process.env.MEDIA_DROP_MARKET_API_KEY || '';
+const ALLOWED_AI_PROVIDERS = new Set(['none', 'gemini', 'openai', 'anthropic', 'groq', 'grok']);
 const ALLOWED_TTS_PROVIDERS = new Set(['none', 'gemini', 'openai', 'elevenlabs']);
+const ALLOWED_WEATHER_PROVIDERS = new Set(['open_meteo', 'weatherapi']);
+const ALLOWED_MARKET_PROVIDERS = new Set(['coingecko_yahoo', 'finnhub']);
 
 // Initialize DB and Downloader
 const db = new DBManager();
@@ -48,6 +57,9 @@ const limiter = rateLimit({
       requestPath === '/api/session' ||
       requestPath === '/api/downloads' ||
       requestPath === '/api/events' ||
+      requestPath === '/api/home/weather' ||
+      requestPath === '/api/home/market' ||
+      requestPath === '/api/home/verse' ||
       requestPath.startsWith('/media/')
     )) {
       return true;
@@ -66,7 +78,8 @@ const getRequestIp = (req) => req.headers['cf-connecting-ip'] || req.ip;
 const getRequestUserAgent = (req) => req.headers['user-agent'];
 
 const normalizeProvider = (value, allowedValues, fallback) => {
-  const candidate = String(value || '').trim().toLowerCase();
+  const raw = String(value || '').trim().toLowerCase();
+  const candidate = raw === 'xai' ? 'grok' : raw;
   if (allowedValues.has(candidate)) return candidate;
   return fallback;
 };
@@ -84,12 +97,40 @@ const getServerSettings = () => {
   );
   const aiApiKey = db.getSetting('ai_api_key', envAiApiKey) || '';
   const ttsApiKey = db.getSetting('tts_api_key', envTtsApiKey) || '';
+  const weatherProvider = normalizeProvider(
+    db.getSetting('weather_provider', envWeatherProvider),
+    ALLOWED_WEATHER_PROVIDERS,
+    'open_meteo'
+  );
+  const marketProvider = normalizeProvider(
+    db.getSetting('market_provider', envMarketProvider),
+    ALLOWED_MARKET_PROVIDERS,
+    'coingecko_yahoo'
+  );
+  const weatherApiKey = db.getSetting('weather_api_key', envWeatherApiKey) || '';
+  const marketApiKey = db.getSetting('market_api_key', envMarketApiKey) || '';
+  const weatherLocation = String(
+    db.getSetting('weather_location', envWeatherLocation) || envWeatherLocation
+  ).trim() || 'Omaha, NE';
+  const weatherLat = String(
+    db.getSetting('weather_lat', envWeatherLat) || envWeatherLat
+  ).trim() || '41.2565';
+  const weatherLon = String(
+    db.getSetting('weather_lon', envWeatherLon) || envWeatherLon
+  ).trim() || '-95.9345';
 
   return {
     ai_provider: aiProvider,
     tts_provider: ttsProvider,
+    weather_provider: weatherProvider,
+    market_provider: marketProvider,
+    weather_location: weatherLocation,
+    weather_lat: weatherLat,
+    weather_lon: weatherLon,
     has_ai_api_key: Boolean(String(aiApiKey).trim()),
     has_tts_api_key: Boolean(String(ttsApiKey).trim()),
+    has_weather_api_key: Boolean(String(weatherApiKey).trim()),
+    has_market_api_key: Boolean(String(marketApiKey).trim()),
   };
 };
 
@@ -429,6 +470,26 @@ const callGroq = async (apiKey, prompt) => {
   return payload?.choices?.[0]?.message?.content || '';
 };
 
+const callGrok = async (apiKey, prompt) => {
+  const response = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: process.env.MEDIA_DROP_GROK_MODEL || 'grok-2-latest',
+      temperature: 0.2,
+      messages: [{ role: 'user', content: buildAiInstruction(prompt) }],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Grok request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  return payload?.choices?.[0]?.message?.content || '';
+};
+
 const requestAiResponse = async (provider, apiKey, prompt) => {
   if (!provider || provider === 'none' || !apiKey) {
     return buildFallbackAiResponse(prompt);
@@ -439,6 +500,7 @@ const requestAiResponse = async (provider, apiKey, prompt) => {
   else if (provider === 'openai') rawText = await callOpenAI(apiKey, prompt);
   else if (provider === 'anthropic') rawText = await callAnthropic(apiKey, prompt);
   else if (provider === 'groq') rawText = await callGroq(apiKey, prompt);
+  else if (provider === 'grok') rawText = await callGrok(apiKey, prompt);
   else return buildFallbackAiResponse(prompt);
 
   const structured = tryParseStructuredAiResponse(rawText);
@@ -456,6 +518,289 @@ const requestAiResponse = async (provider, apiKey, prompt) => {
     query: fallback.query,
     suggested_url: fallback.suggested_url,
   };
+};
+
+const WEATHER_CODE_MAP = {
+  0: 'Clear',
+  1: 'Mostly Clear',
+  2: 'Partly Cloudy',
+  3: 'Overcast',
+  45: 'Fog',
+  48: 'Fog',
+  51: 'Light Drizzle',
+  53: 'Drizzle',
+  55: 'Heavy Drizzle',
+  61: 'Light Rain',
+  63: 'Rain',
+  65: 'Heavy Rain',
+  66: 'Freezing Rain',
+  67: 'Heavy Freezing Rain',
+  71: 'Light Snow',
+  73: 'Snow',
+  75: 'Heavy Snow',
+  80: 'Rain Showers',
+  81: 'Rain Showers',
+  82: 'Heavy Rain Showers',
+  95: 'Thunderstorm',
+  96: 'Thunderstorm',
+  99: 'Thunderstorm',
+};
+
+const CRYPTO_SYMBOL_TO_ID = {
+  BTC: 'bitcoin',
+  ETH: 'ethereum',
+  SOL: 'solana',
+  DOGE: 'dogecoin',
+  XRP: 'ripple',
+  AVAX: 'avalanche-2',
+};
+
+const weatherCache = new Map();
+const marketCache = new Map();
+let verseCache = null;
+
+const toNumberOrNull = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const roundOrNull = (value, digits = 1) => {
+  const numberValue = toNumberOrNull(value);
+  if (numberValue === null) return null;
+  return Number(numberValue.toFixed(digits));
+};
+
+const cToF = (value) => {
+  const numberValue = toNumberOrNull(value);
+  if (numberValue === null) return null;
+  return Number(((numberValue * 9) / 5 + 32).toFixed(1));
+};
+
+const getCachedValue = (cacheMap, key, ttlMs) => {
+  const entry = cacheMap.get(key);
+  if (!entry) return null;
+  if ((Date.now() - entry.cachedAt) > ttlMs) return null;
+  return entry.value;
+};
+
+const setCachedValue = (cacheMap, key, value) => {
+  cacheMap.set(key, { cachedAt: Date.now(), value });
+  return value;
+};
+
+const getHomeWeatherSnapshot = async (settings, unit = 'f') => {
+  const provider = settings.weather_provider || 'open_meteo';
+  const weatherLocation = String(settings.weather_location || 'Omaha, NE').trim() || 'Omaha, NE';
+  const weatherLat = toNumberOrNull(settings.weather_lat);
+  const weatherLon = toNumberOrNull(settings.weather_lon);
+  const weatherApiKey = String(db.getSetting('weather_api_key', envWeatherApiKey) || '').trim();
+
+  const cacheKey = `${provider}:${weatherLocation}:${weatherLat}:${weatherLon}:${unit}`;
+  const cached = getCachedValue(weatherCache, cacheKey, 10 * 60 * 1000);
+  if (cached) return cached;
+
+  if (provider === 'weatherapi') {
+    if (!weatherApiKey) {
+      throw new Error('Weather API key is required when weather provider is weatherapi.');
+    }
+    const weatherApiUrl = new URL('https://api.weatherapi.com/v1/forecast.json');
+    weatherApiUrl.searchParams.set('key', weatherApiKey);
+    weatherApiUrl.searchParams.set('q', weatherLocation);
+    weatherApiUrl.searchParams.set('days', '1');
+    weatherApiUrl.searchParams.set('aqi', 'no');
+    weatherApiUrl.searchParams.set('alerts', 'no');
+
+    const response = await fetch(weatherApiUrl, { method: 'GET' });
+    if (!response.ok) {
+      throw new Error(`Weather provider request failed (${response.status}).`);
+    }
+    const payload = await response.json();
+    const current = payload?.current || {};
+    const forecastDay = payload?.forecast?.forecastday?.[0]?.day || {};
+    const temperatureC = roundOrNull(current?.temp_c);
+    const highC = roundOrNull(forecastDay?.maxtemp_c);
+    const lowC = roundOrNull(forecastDay?.mintemp_c);
+
+    return setCachedValue(weatherCache, cacheKey, {
+      locationLabel: String(payload?.location?.name || weatherLocation),
+      temperatureC,
+      temperatureF: roundOrNull(current?.temp_f),
+      condition: String(current?.condition?.text || 'Unknown'),
+      highC,
+      lowC,
+      highF: cToF(highC),
+      lowF: cToF(lowC),
+      observedAt: String(current?.last_updated || new Date().toISOString()),
+    });
+  }
+
+  if (weatherLat === null || weatherLon === null) {
+    throw new Error('Weather latitude/longitude are not configured correctly.');
+  }
+
+  const openMeteoUrl = new URL('https://api.open-meteo.com/v1/forecast');
+  openMeteoUrl.searchParams.set('latitude', String(weatherLat));
+  openMeteoUrl.searchParams.set('longitude', String(weatherLon));
+  openMeteoUrl.searchParams.set('current', 'temperature_2m,weather_code');
+  openMeteoUrl.searchParams.set('daily', 'temperature_2m_max,temperature_2m_min');
+  openMeteoUrl.searchParams.set('forecast_days', '1');
+  openMeteoUrl.searchParams.set('timezone', 'auto');
+
+  const response = await fetch(openMeteoUrl, { method: 'GET' });
+  if (!response.ok) {
+    throw new Error(`Weather provider request failed (${response.status}).`);
+  }
+  const payload = await response.json();
+  const current = payload?.current || {};
+  const daily = payload?.daily || {};
+
+  const temperatureC = roundOrNull(current?.temperature_2m);
+  const weatherCode = Number(current?.weather_code || 0);
+  const highC = roundOrNull(Array.isArray(daily?.temperature_2m_max) ? daily.temperature_2m_max[0] : null);
+  const lowC = roundOrNull(Array.isArray(daily?.temperature_2m_min) ? daily.temperature_2m_min[0] : null);
+
+  return setCachedValue(weatherCache, cacheKey, {
+    locationLabel: weatherLocation,
+    temperatureC,
+    temperatureF: cToF(temperatureC),
+    condition: WEATHER_CODE_MAP[weatherCode] || 'Unknown',
+    highC,
+    lowC,
+    highF: cToF(highC),
+    lowF: cToF(lowC),
+    observedAt: String(current?.time || new Date().toISOString()),
+  });
+};
+
+const getHomeMarketQuote = async (symbol, assetType, settings) => {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+  const normalizedAssetType = String(assetType || '').trim().toLowerCase();
+  if (!normalizedSymbol) throw new Error('symbol is required');
+  if (!['stock', 'crypto'].includes(normalizedAssetType)) throw new Error('assetType must be stock or crypto');
+
+  const provider = settings.market_provider || 'coingecko_yahoo';
+  const marketApiKey = String(db.getSetting('market_api_key', envMarketApiKey) || '').trim();
+  const cacheKey = `${provider}:${normalizedAssetType}:${normalizedSymbol}`;
+  const cached = getCachedValue(marketCache, cacheKey, 90 * 1000);
+  if (cached) return cached;
+
+  if (provider === 'finnhub') {
+    if (!marketApiKey) {
+      throw new Error('Market API key is required when market provider is finnhub.');
+    }
+    const finnhubSymbol = normalizedAssetType === 'crypto'
+      ? `BINANCE:${normalizedSymbol}USDT`
+      : normalizedSymbol;
+    const finnhubUrl = new URL('https://finnhub.io/api/v1/quote');
+    finnhubUrl.searchParams.set('symbol', finnhubSymbol);
+    finnhubUrl.searchParams.set('token', marketApiKey);
+
+    const response = await fetch(finnhubUrl, { method: 'GET' });
+    if (!response.ok) {
+      throw new Error(`Market provider request failed (${response.status}).`);
+    }
+    const payload = await response.json();
+    const price = toNumberOrNull(payload?.c);
+    if (price === null) {
+      throw new Error(`No market price found for ${normalizedSymbol}.`);
+    }
+    return setCachedValue(marketCache, cacheKey, {
+      symbol: normalizedSymbol,
+      assetType: normalizedAssetType,
+      displayName: normalizedAssetType === 'crypto'
+        ? `${normalizedSymbol}/USDT (BINANCE)`
+        : normalizedSymbol,
+      price: Number(price.toFixed(price < 1 ? 4 : 2)),
+      currency: 'USD',
+      change24h: roundOrNull(payload?.d, 2),
+      changePercent24h: roundOrNull(payload?.dp, 2),
+      updatedAt: String(payload?.t || Math.floor(Date.now() / 1000)),
+    });
+  }
+
+  if (normalizedAssetType === 'crypto') {
+    const coinId = CRYPTO_SYMBOL_TO_ID[normalizedSymbol] || normalizedSymbol.toLowerCase();
+    const coingeckoUrl = new URL('https://api.coingecko.com/api/v3/simple/price');
+    coingeckoUrl.searchParams.set('ids', coinId);
+    coingeckoUrl.searchParams.set('vs_currencies', 'usd');
+    coingeckoUrl.searchParams.set('include_24hr_change', 'true');
+
+    const response = await fetch(coingeckoUrl, { method: 'GET' });
+    if (!response.ok) {
+      throw new Error(`Crypto quote request failed (${response.status}).`);
+    }
+    const payload = await response.json();
+    const row = payload?.[coinId];
+    const price = toNumberOrNull(row?.usd);
+    if (price === null) {
+      throw new Error(`No crypto quote found for ${normalizedSymbol}.`);
+    }
+    return setCachedValue(marketCache, cacheKey, {
+      symbol: normalizedSymbol,
+      assetType: 'crypto',
+      displayName: String(coinId).replace(/-/g, ' '),
+      price: Number(price.toFixed(price < 1 ? 4 : 2)),
+      currency: 'USD',
+      change24h: null,
+      changePercent24h: roundOrNull(row?.usd_24h_change, 2),
+      updatedAt: String(Date.now()),
+    });
+  }
+
+  const yahooUrl = new URL('https://query1.finance.yahoo.com/v7/finance/quote');
+  yahooUrl.searchParams.set('symbols', normalizedSymbol);
+  const response = await fetch(yahooUrl, { method: 'GET' });
+  if (!response.ok) {
+    throw new Error(`Stock quote request failed (${response.status}).`);
+  }
+  const payload = await response.json();
+  const row = payload?.quoteResponse?.result?.[0];
+  const price = toNumberOrNull(row?.regularMarketPrice);
+  if (price === null) {
+    throw new Error(`No stock quote found for ${normalizedSymbol}.`);
+  }
+  return setCachedValue(marketCache, cacheKey, {
+    symbol: normalizedSymbol,
+    assetType: 'stock',
+    displayName: String(row?.shortName || row?.longName || normalizedSymbol),
+    price: Number(price.toFixed(2)),
+    currency: String(row?.currency || 'USD'),
+    change24h: roundOrNull(row?.regularMarketChange, 2),
+    changePercent24h: roundOrNull(row?.regularMarketChangePercent, 2),
+    updatedAt: String(row?.regularMarketTime || Date.now()),
+  });
+};
+
+const getVerseOfDay = async () => {
+  if (verseCache && ((Date.now() - verseCache.cachedAt) <= (6 * 60 * 60 * 1000))) {
+    return verseCache.value;
+  }
+
+  const verseUrl = new URL('https://beta.ourmanna.com/api/v1/get/');
+  verseUrl.searchParams.set('format', 'json');
+  const response = await fetch(verseUrl, { method: 'GET' });
+  if (!response.ok) {
+    throw new Error(`Verse provider request failed (${response.status}).`);
+  }
+  const payload = await response.json();
+  const details = payload?.verse?.details || {};
+  const reference = String(details?.reference || '').trim();
+  const text = String(details?.text || '').trim();
+  if (!reference || !text) {
+    throw new Error('Verse provider returned an empty payload.');
+  }
+
+  const verse = {
+    reference,
+    text,
+    translation: String(details?.version || '').trim() || null,
+    fetchedAt: new Date().toISOString(),
+  };
+  verseCache = {
+    cachedAt: Date.now(),
+    value: verse,
+  };
+  return verse;
 };
 
 const normalizeRelativePath = (value) => {
@@ -700,6 +1045,63 @@ app.patch('/api/settings', auth, (req, res) => {
     updates.tts_api_key = payload.tts_api_key.trim();
   }
 
+  if (Object.prototype.hasOwnProperty.call(payload, 'weather_provider')) {
+    if (typeof payload.weather_provider !== 'string') {
+      return res.status(400).json({ error: 'weather_provider must be a string' });
+    }
+    const normalized = normalizeProvider(payload.weather_provider, ALLOWED_WEATHER_PROVIDERS, '');
+    if (!normalized) {
+      return res.status(400).json({ error: 'Unsupported weather_provider value' });
+    }
+    updates.weather_provider = normalized;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'market_provider')) {
+    if (typeof payload.market_provider !== 'string') {
+      return res.status(400).json({ error: 'market_provider must be a string' });
+    }
+    const normalized = normalizeProvider(payload.market_provider, ALLOWED_MARKET_PROVIDERS, '');
+    if (!normalized) {
+      return res.status(400).json({ error: 'Unsupported market_provider value' });
+    }
+    updates.market_provider = normalized;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'weather_api_key')) {
+    if (typeof payload.weather_api_key !== 'string') {
+      return res.status(400).json({ error: 'weather_api_key must be a string' });
+    }
+    updates.weather_api_key = payload.weather_api_key.trim();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'market_api_key')) {
+    if (typeof payload.market_api_key !== 'string') {
+      return res.status(400).json({ error: 'market_api_key must be a string' });
+    }
+    updates.market_api_key = payload.market_api_key.trim();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'weather_location')) {
+    if (typeof payload.weather_location !== 'string') {
+      return res.status(400).json({ error: 'weather_location must be a string' });
+    }
+    updates.weather_location = payload.weather_location.trim();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'weather_lat')) {
+    if (typeof payload.weather_lat !== 'string') {
+      return res.status(400).json({ error: 'weather_lat must be a string' });
+    }
+    updates.weather_lat = payload.weather_lat.trim();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'weather_lon')) {
+    if (typeof payload.weather_lon !== 'string') {
+      return res.status(400).json({ error: 'weather_lon must be a string' });
+    }
+    updates.weather_lon = payload.weather_lon.trim();
+  }
+
   const keys = Object.keys(updates);
   if (keys.length === 0) {
     return res.status(400).json({ error: 'No valid settings supplied' });
@@ -720,6 +1122,60 @@ app.patch('/api/settings', auth, (req, res) => {
     success: true,
     settings: getServerSettings(),
   });
+});
+
+app.get('/api/home/weather', auth, async (req, res) => {
+  const unit = String(req.query?.unit || 'f').trim().toLowerCase();
+  if (!['f', 'c'].includes(unit)) {
+    return res.status(400).json({ error: 'unit must be f or c' });
+  }
+  try {
+    const snapshot = await getHomeWeatherSnapshot(getServerSettings(), unit);
+    return res.json({
+      success: true,
+      snapshot,
+    });
+  } catch (error) {
+    return res.status(503).json({
+      error: `Weather provider unavailable: ${error.message}`,
+    });
+  }
+});
+
+app.get('/api/home/market', auth, async (req, res) => {
+  const symbol = String(req.query?.symbol || '').trim();
+  const assetType = String(req.query?.assetType || 'crypto').trim().toLowerCase();
+  if (!symbol) {
+    return res.status(400).json({ error: 'symbol is required' });
+  }
+  if (!['stock', 'crypto'].includes(assetType)) {
+    return res.status(400).json({ error: 'assetType must be stock or crypto' });
+  }
+  try {
+    const quote = await getHomeMarketQuote(symbol, assetType, getServerSettings());
+    return res.json({
+      success: true,
+      quote,
+    });
+  } catch (error) {
+    return res.status(503).json({
+      error: `Market provider unavailable: ${error.message}`,
+    });
+  }
+});
+
+app.get('/api/home/verse', auth, async (_req, res) => {
+  try {
+    const verse = await getVerseOfDay();
+    return res.json({
+      success: true,
+      verse,
+    });
+  } catch (error) {
+    return res.status(503).json({
+      error: `Verse provider unavailable: ${error.message}`,
+    });
+  }
 });
 
 app.post('/api/ai/search', auth, async (req, res) => {

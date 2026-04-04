@@ -109,9 +109,12 @@ function injectYouTubeControls() {
     console.log('🐦 [YouTube] Found action bar, injecting button...');
 
     const videoUrl = window.location.href;
-    const videoTitle = document.querySelector('h1.ytd-video-primary-info-renderer')?.innerText || 
+    const videoTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.innerText ||
+                       document.querySelector('ytd-watch-metadata h1')?.innerText ||
+                       document.querySelector('h1.ytd-video-primary-info-renderer')?.innerText || 
                        document.querySelector('yt-formatted-string.ytd-video-primary-info-renderer')?.innerText ||
                        document.querySelector('meta[name="title"]')?.content || 
+                       document.title ||
                        "YouTube Video";
 
     const btn = document.createElement('button');
