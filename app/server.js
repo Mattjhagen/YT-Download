@@ -1512,6 +1512,17 @@ const MIME_TYPES = {
 // Media Streaming with Range support — supports subfolders via wildcard
 app.get('/media/*', mediaAuth, (req, res) => {
   const requestedPath = req.params[0];
+  
+  // 🛰️ CORS and Range Access (Crucial for in-app players)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, x-finchwire-token');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
   const resolved = resolveMediaPath(requestedPath);
   const libraryRoot = getLibraryRoot();
 
