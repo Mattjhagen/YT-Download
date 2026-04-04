@@ -5,8 +5,7 @@
   "description": "Premium media downloader and VLC integration for FinchWire. Now supports remote YouTube downloads.",
   "permissions": ["downloads", "storage", "notifications"],
   "host_permissions": [
-    "*://yt.finchwire.site/*",
-    "https://*.youtube.com/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

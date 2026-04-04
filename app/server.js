@@ -42,7 +42,14 @@ if (!db.getSetting('admin_password') && envAdminPassword) {
 // Middleware
 app.use(express.json());
 app.use(cookieParser());
-app.set('trust proxy', 1); // For Cloudflare/proxies to get real IP
+app.set('trust proxy', 1);
+
+// 🔦 Lighthouse Logger (Spotlight for all requests)
+app.use((req, res, next) => {
+    const ip = req.headers['cf-connecting-ip'] || req.ip;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} from ${ip}`);
+    next();
+});
 
 const limiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
