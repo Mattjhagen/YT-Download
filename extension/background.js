@@ -42,6 +42,12 @@ async function handleRemoteDownload(videoUrl, title, sendResponse) {
         let serverUrl = syncData.serverUrl || localData.serverUrl;
         let serverPassword = syncData.serverPassword || localData.serverPassword;
         
+        // 🩹 Self-Healing: If we found data in one but not the other, sync them now!
+        if (serverUrl && serverPassword) {
+            if (!syncData.serverUrl) chrome.storage.sync.set({ serverUrl, serverPassword });
+            if (!localData.serverUrl) chrome.storage.local.set({ serverUrl, serverPassword });
+        }
+        
         if (!serverUrl || !serverPassword) {
             console.error('FinchWire: Configuration missing in storage (Sync or Local). URL:', !!serverUrl, 'Password:', !!serverPassword);
             sendResponse({ success: false, error: 'Configuration missing' });
