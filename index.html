@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinchWire — Media, News & Intelligence Hub</title>
+  <meta name="description" content="FinchWire: The ultimate all-in-one personal media dashboard. Download anything, follow creators, and get AI-powered news ranking." />
+  
+  <!-- Premium Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+  
+  <style>
+    :root {
+      --brand-primary:   #6366f1; /* Indigo 500 */
+      --brand-secondary: #a855f7; /* Purple 500 */
+      --brand-accent:    #ec4899; /* Pink 500 */
+      --bg-dark:         #030712; /* Slate 950 */
+      --bg-surface:      #111827; /* Slate 900 */
+      --bg-surface-alt:  #1f2937; /* Slate 800 */
+      --text-main:       #f9fafb;
+      --text-muted:      #9ca3af;
+      --glass-bg:        rgba(17, 24, 39, 0.7);
+      --glass-border:    rgba(255, 255, 255, 0.08);
+      --radius-lg:       24px;
+      --radius-md:       16px;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      line-height: 1.6;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Background Blobs ── */
+    .blob {
+      position: absolute;
+      width: 500px;
+      height: 500px;
+      background: radial-gradient(circle, var(--brand-primary) 0%, transparent 70%);
+      filter: blur(80px);
+      opacity: 0.15;
+      z-index: -1;
+      pointer-events: none;
+    }
+    .blob-1 { top: -100px; right: -100px; }
+    .blob-2 { top: 40%; left: -200px; background: var(--brand-secondary); }
+    .blob-3 { bottom: -100px; right: 20%; background: var(--brand-accent); }
+
+    /* ── Header / Nav ── */
+    header {
+      position: fixed;
+      top: 0;
+      width: 100%;
+      z-index: 1000;
+      padding: 1.25rem 2rem;
+      transition: all 0.3s ease;
+    }
+    header.scrolled {
+      background: var(--glass-bg);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--glass-border);
+      padding: 0.75rem 2rem;
+    }
+    .nav-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -1px;
+      background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-decoration: none;
+    }
+    .nav-links {
+      display: flex;
+      gap: 2.5rem;
+      align-items: center;
+    }
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.95rem;
+      font-weight: 500;
+      transition: color 0.2s ease;
+    }
+    .nav-links a:hover {
+      color: var(--text-main);
+    }
+    .nav-cta {
+      background: var(--text-main);
+      color: var(--bg-dark);
+      padding: 0.6rem 1.25rem;
+      border-radius: 99px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: transform 0.2s ease;
+    }
+    .nav-cta:hover {
+      transform: scale(1.05);
+    }
+
+    /* ── Hero Section ── */
+    .hero {
+      padding: 10rem 2rem 6rem;
+      text-align: center;
+      position: relative;
+    }
+    .hero-badge {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--glass-border);
+      padding: 0.5rem 1.25rem;
+      border-radius: 99px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 2rem;
+      color: var(--brand-primary);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .hero h1 {
+      font-size: clamp(2.5rem, 8vw, 4.5rem);
+      font-weight: 900;
+      line-height: 1.1;
+      letter-spacing: -2px;
+      margin-bottom: 1.5rem;
+      background: linear-gradient(to bottom, #fff 40%, #9ca3af);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p {
+      font-size: 1.25rem;
+      color: var(--text-muted);
+      max-width: 650px;
+      margin: 0 auto 3rem;
+    }
+    .hero-btns {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 1rem 2.5rem;
+      border-radius: 99px;
+      font-size: 1rem;
+      font-weight: 700;
+      text-decoration: none;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
+      color: #fff;
+      box-shadow: 0 10px 40px -10px rgba(99, 102, 241, 0.5);
+    }
+    .btn-primary:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 40px -10px rgba(99, 102, 241, 0.6);
+    }
+    .btn-secondary {
+      background: var(--bg-surface-alt);
+      color: #fff;
+      border: 1px solid var(--glass-border);
+    }
+    .btn-secondary:hover {
+      background: #2d3748;
+      transform: translateY(-4px);
+    }
+
+    /* ── Features ── */
+    .features {
+      padding: 8rem 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .section-header {
+      text-align: center;
+      margin-bottom: 5rem;
+    }
+    .section-header h2 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      margin-bottom: 1rem;
+      letter-spacing: -1px;
+    }
+    .section-header p {
+      color: var(--text-muted);
+      font-size: 1.1rem;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 2rem;
+    }
+    .feature-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--glass-border);
+      padding: 2.5rem;
+      border-radius: var(--radius-lg);
+      position: relative;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: linear-gradient(135deg, var(--brand-primary) 0%, transparent 100%);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      z-index: 0;
+    }
+    .feature-card:hover {
+      transform: translateY(-8px);
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+    .feature-card:hover::before {
+      opacity: 0.05;
+    }
+    .feature-icon {
+      width: 60px;
+      height: 60px;
+      background: rgba(99, 102, 241, 0.1);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.5rem;
+      position: relative;
+      z-index: 1;
+    }
+    .feature-icon svg {
+      width: 28px;
+      height: 28px;
+      color: var(--brand-primary);
+    }
+    .feature-card h3 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      position: relative;
+      z-index: 1;
+    }
+    .feature-card p {
+      color: var(--text-muted);
+      font-size: 1rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ── Download Section ── */
+    .download {
+      padding: 8rem 2rem;
+      text-align: center;
+      background: linear-gradient(to bottom, var(--bg-dark), var(--bg-surface));
+    }
+    .download-card {
+      max-width: 900px;
+      margin: 0 auto;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1));
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      border-radius: 40px;
+      padding: 4rem 2rem;
+      backdrop-filter: blur(10px);
+    }
+    .download h2 {
+      font-size: 3rem;
+      font-weight: 900;
+      margin-bottom: 1.5rem;
+      letter-spacing: -1.5px;
+    }
+    .download-btns {
+      display: flex;
+      gap: 1.25rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 3rem;
+    }
+    .download-btn {
+      padding: 1rem 2rem;
+      border-radius: 16px;
+      background: var(--bg-dark);
+      border: 1px solid var(--glass-border);
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      text-align: left;
+      transition: all 0.3s ease;
+    }
+    .download-btn:hover {
+      border-color: var(--brand-primary);
+      transform: scale(1.02);
+    }
+    .download-btn span {
+      display: block;
+    }
+    .download-btn .sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .download-btn .main {
+      font-size: 1.2rem;
+      font-weight: 700;
+    }
+    .download-btn.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .badge-pro {
+      display: inline-block;
+      background: var(--brand-accent);
+      color: #fff;
+      font-size: 0.7rem;
+      font-weight: 800;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      vertical-align: middle;
+      margin-left: 0.5rem;
+      text-transform: uppercase;
+    }
+
+    /* ── Footer ── */
+    footer {
+      padding: 4rem 2rem;
+      border-top: 1px solid var(--glass-border);
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 2rem;
+    }
+    .footer-info p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+    .footer-links {
+      display: flex;
+      gap: 2rem;
+    }
+    .footer-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: color 0.2s ease;
+    }
+    .footer-links a:hover {
+      color: var(--text-main);
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+      .hero h1 { font-size: 3rem; }
+      .hero p { font-size: 1.1rem; }
+      header { padding: 1rem; }
+      .download h2 { font-size: 2.2rem; }
+      footer { flex-direction: column; text-align: center; }
+    }
+
+    /* Animations */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate {
+      animation: fadeIn 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+    .delay-1 { animation-delay: 0.2s; }
+    .delay-2 { animation-delay: 0.4s; }
+  </style>
+</head>
+<body>
+
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+
+  <header id="header">
+    <div class="nav-container">
+      <a href="#" class="logo">FinchWire</a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#download">Download</a>
+        <a href="https://yt.finchwire.site">Web App</a>
+        <a href="/privacy">Privacy</a>
+      </div>
+      <a href="#download" class="nav-cta">Get APK</a>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="hero-badge animate">Beta MVP Now Live</div>
+    <h1 class="animate delay-1">The All-in-One Personal <span>Intelligence</span> Hub</h1>
+    <p class="animate delay-2">
+      FinchWire unifies your digital world. Download any media, follow your favorite creators, and get AI-ranked news in a beautiful, private ecosystem.
+    </p>
+    <div class="hero-btns animate delay-2">
+      <a href="#download" class="btn btn-primary">
+        <svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 11h2.79l-3.79 3.79-3.79-3.79H11V7h2v6z"/></svg>
+        Download Direct APK
+      </a>
+      <a href="https://yt.finchwire.site" class="btn btn-secondary">Open Web Version</a>
+    </div>
+  </section>
+
+  <section id="features" class="features">
+    <div class="section-header">
+      <h2>Advanced Features for Power Users</h2>
+      <p>Built for those who demand privacy, speed, and real intelligence.</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z"></path></svg>
+        </div>
+        <h3>Global AI Assistant <span class="badge-pro">New</span></h3>
+        <p>A context-aware AI helper available on every single screen. Summarize articles, ask questions about your media library, or get help navigating your day.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+        </div>
+        <h3>Zero-Leak Browsing</h3>
+        <p>Our custom internal browser keeps you localized. Read news and watch sources without being tracked or ejected into external mobile browsers.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"></path></svg>
+        </div>
+        <h3>Media Command Center</h3>
+        <p>Queue any video or audio URL for high-speed background downloading. Full-featured player with offline support, scrubbing, and background playback.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10l4 4v10a2 2 0 01-2 2zM14 2v4h4"></path></svg>
+        </div>
+        <h3>News Intelligence</h3>
+        <p>A self-learning news feed that ranks stories by trending velocity and your personal interests. No black-box algorithms, just pure signal.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+        </div>
+        <h3>Creator Pulse</h3>
+        <p>Real-time notifications the second your favorite creators upload or go live. Aggregate all your notifications into one clean, priority-sorted list.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 01.3-.7l7-7a1 1 0 011.4 0l7 7a1 1 0 01.3.7V20a1 1 0 01-1 1h-4a1 1 0 01-1-1v-5a1 1 0 00-1-1h-2a1 1 0 00-1 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5z"></path></svg>
+        </div>
+        <h3>Smart Dashboard</h3>
+        <p>One screen to rule them all. Live weather, market quotes, download status, and your daily word of inspiration, all in reorderable glass tiles.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" class="download">
+    <div class="download-card">
+      <h2>Experience FinchWire Today</h2>
+      <p>Direct download for Android users. iPhone users, we're coming for you soon.</p>
+      
+      <div class="download-btns">
+        <a href="https://yt.finchwire.site/finchwire.apk" class="download-btn">
+          <svg fill="currentColor" viewBox="0 0 24 24" width="32" height="32"><path d="M17.523 15.3414L16.035 12.7534C15.861 12.4514 15.961 12.0634 16.262 11.8884C16.564 11.7134 16.953 11.8154 17.127 11.1164L18.618 13.7044C18.793 14.0064 18.692 14.3944 18.391 14.5694C18.089 14.7434 17.699 14.6414 17.523 15.3414ZM6.47702 15.3414L7.96502 12.7534C8.13902 12.4514 8.03702 12.0634 7.73702 11.8884C7.43502 11.7134 7.04502 11.8154 6.87202 11.1164L5.38202 13.7044C5.20702 14.0064 5.30902 14.3944 5.61102 14.5694C5.91202 14.7434 6.30202 14.6414 6.47702 15.3414Z"/><path d="M16 11V10H8V11H16Z"/><path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM17 11C15.9 11 15 10.1 15 9C15 7.9 15.9 7 17 7C18.1 7 19 7.9 19 9C19 10.1 18.1 11 17 11ZM7 11C5.9 11 5 10.1 5 9C5 7.9 5.9 7 7 7C8.1 7 9 7.9 9 9C9 10.1 8.1 11 7 11Z"/></svg>
+          <div>
+            <span class="sub">Download Direct</span>
+            <span class="main">Android APK</span>
+          </div>
+        </a>
+
+        <div class="download-btn disabled">
+          <svg fill="currentColor" viewBox="0 0 24 24" width="32" height="32"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.1 2.48-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.89 1.22-2.11 1.09-3.33-1.04.04-2.3.7-3.05 1.57-.67.77-1.26 2.01-1.12 3.21 1.15.09 2.34-.56 3.08-1.45Z"/></svg>
+          <div>
+            <span class="sub">Coming Soon</span>
+            <span class="main">iPhone (iOS)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="footer-info">
+      <p>&copy; 2026 FinchWire. Built for the future of digital freedom.</p>
+    </div>
+    <div class="footer-links">
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:support@finchwire.site">Contact</a>
+    </div>
+  </footer>
+
+  <script>
+    window.addEventListener('scroll', () => {
+      const header = document.getElementById('header');
+      if (window.scrollY > 50) {
+        header.classList.add('scrolled');
+      } else {
+        header.classList.remove('scrolled');
+      }
+    });
+
+    // Simple reveal animation implementation
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('animate');
+        }
+      });
+    }, { threshold: 0.1 });
+
+    document.querySelectorAll('.feature-card').forEach(card => {
+      observer.observe(card);
+    });
+  </script>
+</body>
+</html>
